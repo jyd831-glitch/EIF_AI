@@ -1,0 +1,168 @@
+import type { LogFile, TimeFloorEvent, TimeFloorResult } from "./types";
+import { toMessages } from "./sequence";
+import { parseSfcLog } from "./parsers/sfc";
+import { parseSolaceLog } from "./parsers/solace";
+import { parseTraceLog } from "./parsers/trace";
+import { isPcAscTrace, parsePcTraceLog } from "./parsers/pcTrace";
+
+function normPath(p: string) {
+  return p.replace(/\\/g, "/");
+}
+
+function filterByLot(all: TimeFloorEvent[], lot: string): TimeFloorEvent[] {
+  const anchors = all.filter((e) => e.lotId?.toLowerCase() === lot.toLowerCase());
+  if (!anchors.length) return [];
+
+  const selected = new Set<string>(anchors.map((a) => a.id));
+  const orderedAnchors = [...anchors].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+
+  type Cluster = { start: Date; end: Date; positions: Set<string> };
+  const clusters: Cluster[] = [];
+  let cStart: Date | null = null;
+  let cEnd: Date = new Date(0);
+  let positions = new Set<string>();
+
+  const flush = () => {
+    if (!cStart) return;
+    clusters.push({
+      start: new Date(cStart.getTime() - 2000),
+      end: new Date(cEnd.getTime() + 3000),
+      positions: new Set(positions),
+    });
+    cStart = null;
+    positions = new Set();
+  };
+
+  for (const a of orderedAnchors) {
+    if (!cStart) {
+      cStart = a.timestamp;
+      cEnd = a.timestamp;
+      if (a.position) positions.add(a.position);
+      continue;
+    }
+    if ((a.timestamp.getTime() - cEnd.getTime()) / 1000 > 30) {
+      flush();
+      cStart = a.timestamp;
+      cEnd = a.timestamp;
+      if (a.position) positions.add(a.position);
+    } else {
+      cEnd = a.timestamp;
+      if (a.position) positions.add(a.position);
+    }
+  }
+  flush();
+
+  for (const { start, end, positions: posSet } of clusters) {
+    for (const e of all) {
+      if (e.timestamp < start || e.timestamp > end) continue;
+      if (e.lotId?.toLowerCase() === lot.toLowerCase()) {
+        selected.add(e.id);
+        continue;
+      }
+      if (e.source === "Trace" && !e.lotId) {
+        if (
+          posSet.size === 0 ||
+          (e.position && posSet.has(e.position)) ||
+          orderedAnchors.some(
+            (a) =>
+              Math.abs(a.timestamp.getTime() - e.timestamp.getTime()) / 1000 <= 4 &&
+              (!e.position || !a.position || a.position === e.position)
+          )
+        ) {
+          selected.add(e.id);
+        }
+        continue;
+      }
+      if (e.source === "Sfc" && !e.lotId) {
+        const near = orderedAnchors.some(
+          (a) =>
+            Math.abs(a.timestamp.getTime() - e.timestamp.getTime()) / 1000 <= 2 &&
+            (!e.procId || !a.procId || a.procId.toLowerCase() === e.procId.toLowerCase())
+        );
+        if (near) selected.add(e.id);
+      }
+    }
+  }
+
+  return all.filter((e) => selected.has(e.id));
+}
+
+export function groupLogFiles(files: LogFile[]) {
+  const groups = new Map<string, { sfc: LogFile[]; solace: LogFile[]; trace: LogFile[]; root: string }>();
+
+  for (const f of files) {
+    const path = normPath(f.relativePath);
+    const parts = path.split("/");
+    const typeIdx = parts.findIndex((p) => /^(SFC|SOLACE|TRACE)$/i.test(p));
+    if (typeIdx < 0) continue;
+    const root = parts.slice(0, typeIdx).join("/") || "LOG";
+    const kind = parts[typeIdx].toUpperCase();
+    if (!groups.has(root)) groups.set(root, { sfc: [], solace: [], trace: [], root });
+    const g = groups.get(root)!;
+    if (kind === "SFC") g.sfc.push(f);
+    else if (kind === "SOLACE") g.solace.push(f);
+    else if (kind === "TRACE") g.trace.push(f);
+  }
+
+  return [...groups.values()];
+}
+
+export function collectLotIds(events: TimeFloorEvent[]): string[] {
+  return [
+    ...new Set(events.map((e) => e.lotId).filter((x): x is string => !!x?.trim())),
+  ].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+}
+
+export function buildTimeFloor(
+  files: LogFile[],
+  lotId: string,
+  includeBitOff: boolean
+): TimeFloorResult {
+  const groups = groupLogFiles(files);
+  if (!groups.length) {
+    throw new Error("SFC / SOLACE / TRACE 하위 폴더가 있는 로그를 선택하세요. (예: PCTYPE, PLCTYPE, SFCTYPE)");
+  }
+
+  const events: TimeFloorEvent[] = [];
+  const roots: string[] = [];
+
+  for (const g of groups) {
+    roots.push(g.root);
+    for (const f of g.sfc) events.push(...parseSfcLog(f.text, f.name));
+    for (const f of g.solace) events.push(...parseSolaceLog(f.text, f.name));
+    for (const f of g.trace) {
+      if (isPcAscTrace(f.text)) events.push(...parsePcTraceLog(f.text, f.name));
+      else events.push(...parseTraceLog(f.text, f.name, includeBitOff));
+    }
+  }
+
+  events.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime() || a.id.localeCompare(b.id));
+  const lotIds = collectLotIds(events);
+  const filtered = lotId.trim() ? filterByLot(events, lotId.trim()) : events;
+  const list = filtered.slice(0, 2000);
+  const messages = toMessages(list);
+
+  return {
+    sessionId: roots.join(", "),
+    logType: roots.join(", "),
+    equipmentKey: roots.join(", "),
+    lotId: lotId.trim() || undefined,
+    startTime: list[0]?.timestamp,
+    endTime: list.at(-1)?.timestamp,
+    totalEvents: list.length,
+    lotIds,
+    events: list,
+    messages,
+  };
+}
+
+export async function readFilesFromInput(fileList: FileList): Promise<LogFile[]> {
+  const out: LogFile[] = [];
+  for (const file of Array.from(fileList)) {
+    if (!/\.log$/i.test(file.name)) continue;
+    const relativePath = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
+    const text = await file.text();
+    out.push({ name: file.name, relativePath, text });
+  }
+  return out;
+}

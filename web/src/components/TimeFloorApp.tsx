@@ -396,10 +396,27 @@ function SequenceView({
   );
 }
 
+function FieldPairs({ entries, empty }: { entries: [string, string][]; empty: string }) {
+  if (!entries.length) return <div className="muted">{empty}</div>;
+  return (
+    <>
+      {entries.map(([k, v]) => (
+        <div key={k} style={{ display: "contents" }}>
+          <div>{k}</div>
+          <div style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{v}</div>
+        </div>
+      ))}
+    </>
+  );
+}
+
 function DetailBody({ msg }: { msg: SequenceMessage }) {
   const isTrace = msg.source === "Trace";
-  const entries = Object.entries(msg.fields || {});
+  const bitEntries = Object.entries(msg.fields || {});
+  const wordEntries = Object.entries(msg.wordFields || {});
+  const hasWord = wordEntries.length > 0 || !!msg.wordRawSnippet;
   const raw = prettyRaw(msg.rawSnippet);
+  const wordRaw = prettyRaw(msg.wordRawSnippet);
 
   return (
     <div>
@@ -414,26 +431,51 @@ function DetailBody({ msg }: { msg: SequenceMessage }) {
         <div>{msg.label || ""}</div>
         <div>Sub</div>
         <div>{msg.subLabel || "-"}</div>
+        <div>Signal</div>
+        <div>{msg.signal || "-"}</div>
+        <div>Value</div>
+        <div>{msg.value || "-"}</div>
         <div>LOTID</div>
         <div>{msg.lotId || "-"}</div>
+        <div>POSITION</div>
+        <div>{msg.position || "-"}</div>
         <div>Alarm</div>
         <div>{msg.isAlarm ? "YES" : "no"}</div>
       </div>
+
       <h3 className="detail-section-title">{isTrace ? "Bit Fields" : "Fields"}</h3>
       <div className="kv">
-        {entries.length ? (
-          entries.map(([k, v]) => (
-            <div key={k} style={{ display: "contents" }}>
-              <div>{k}</div>
-              <div>{v}</div>
-            </div>
-          ))
-        ) : (
-          <div className="muted">없음</div>
-        )}
+        <FieldPairs entries={bitEntries} empty="없음" />
       </div>
+
       <h3 className="detail-section-title">{isTrace ? "Bit Raw" : "Message Raw"}</h3>
-      <pre className="raw">{raw}</pre>
+      {raw ? <pre className="raw">{raw}</pre> : <p className="muted">없음</p>}
+
+      {isTrace &&
+        (hasWord ? (
+          <>
+            <h3 className="detail-section-title">Word Data</h3>
+            <div className="kv">
+              <div>Signal</div>
+              <div>{msg.wordSignal || "-"}</div>
+              <div>Time</div>
+              <div>{fmtDateTime(msg.wordTimestamp)}</div>
+            </div>
+            <div className="kv" style={{ marginTop: "0.5rem" }}>
+              <FieldPairs entries={wordEntries} empty="필드 없음" />
+            </div>
+            {wordRaw ? (
+              <div className="raw-wrap" style={{ marginTop: "0.5rem" }}>
+                <pre className="raw">{wordRaw}</pre>
+              </div>
+            ) : null}
+          </>
+        ) : (
+          <>
+            <h3 className="detail-section-title">Word Data</h3>
+            <p className="muted">매칭되는 Word 데이터 없음</p>
+          </>
+        ))}
     </div>
   );
 }

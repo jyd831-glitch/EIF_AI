@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <title>EIF TimeFloor Viewer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/css/app.css?v=14" />
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark">EIF</span>
+        <div>
+          <h1>TimeFloor Viewer</h1>
+          <p>MES · EIF · PLC sequence diagram</p>
+        </div>
+      </div>
+      <div class="top-meta" id="topMeta">로그 폴더와 LOTID를 선택하세요</div>
+    </header>
+
+    <aside class="sidebar">
+      <div class="field">
+        <span>로그 폴더</span>
+        <div class="folder-picker">
+          <input id="folderPathInput" type="text" readonly placeholder="찾아보기를 눌러 폴더 선택" value="" />
+          <button type="button" class="btn" id="browseFolderBtn">찾아보기...</button>
+        </div>
+      </div>
+      <label class="field lot-field">
+        <span>LOT ID</span>
+        <div class="lot-combo">
+          <input id="lotInput" type="text" placeholder="예: HZFG300200" autocomplete="off" spellcheck="false" />
+          <ul id="lotSuggestions" class="lot-suggest" hidden></ul>
+        </div>
+      </label>
+      <label class="check">
+        <input type="checkbox" id="includeBitOff" checked />
+        <span>BIT OFF 포함</span>
+      </label>
+      <button class="btn primary" id="loadBtn" type="button">타임플로어 작성</button>
+      <div class="stats" id="stats"></div>
+      <div class="legend">
+        <div><i class="dot mes"></i> MES</div>
+        <div><i class="dot eif"></i> EIF</div>
+        <div><i class="dot plc"></i> PLC</div>
+      </div>
+    </aside>
+
+    <main class="stage">
+      <div class="diagram-wrap" id="diagramWrap">
+        <div class="empty" id="emptyState"><b>찾아보기...</b>로 로그 폴더를 선택한 뒤 LOTID를 입력하세요.</div>
+        <div class="seq" id="seq" hidden>
+          <div class="seq-sticky">
+            <div class="seq-heads">
+              <div class="actor mes">MES</div>
+              <div class="actor eif">EIF</div>
+              <div class="actor plc">PLC</div>
+            </div>
+          </div>
+          <svg id="seqSvg" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMin meet"></svg>
+        </div>
+      </div>
+    </main>
+
+    <section class="detail" id="detailPanel" hidden>
+      <header>
+        <h2>메시지 상세</h2>
+        <button type="button" id="closeDetail" class="btn ghost">닫기</button>
+      </header>
+      <div id="detailBody" class="detail-body">
+        <p class="muted">메시지 NAME을 클릭하면 상세 내용이 표시됩니다.</p>
+      </div>
+    </section>
+  </div>
+
+  <!-- Windows Explorer style folder browser -->
+  <div class="modal hidden" id="folderModal" aria-hidden="true">
+    <div class="modal-backdrop" id="folderModalBackdrop"></div>
+    <div class="win-dialog" role="dialog" aria-labelledby="folderModalTitle">
+      <div class="win-titlebar">
+        <span id="folderModalTitle">폴더 찾아보기</span>
+        <button type="button" class="win-x" id="folderModalClose" title="닫기">×</button>
+      </div>
+
+      <div class="win-body">
+        <p class="win-help">타임플로어에 사용할 로그 폴더를 선택하십시오.</p>
+
+        <div class="win-nav">
+          <button type="button" class="win-nav-btn" id="explorerUp" title="상위 폴더">⬆ 상위</button>
+          <div class="win-address" id="explorerPath">LOG</div>
+        </div>
+
+        <div class="win-split">
+          <div class="win-tree" id="folderTree"></div>
+          <div class="win-content" id="explorerList"></div>
+        </div>
+
+        <div class="win-folder-row">
+          <label for="modalFolderName">폴더:</label>
+          <input id="modalFolderName" type="text" readonly value="" />
+        </div>
+      </div>
+
+      <div class="win-buttons">
+        <button type="button" class="win-btn primary" id="folderModalOk" disabled>확인</button>
+        <button type="button" class="win-btn" id="folderModalCancel">취소</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/js/app.js?v=14"></script>
+</body>
+</html>

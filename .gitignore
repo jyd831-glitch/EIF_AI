@@ -1,0 +1,19 @@
+# Build / IDE
+**/bin/
+**/obj/
+**/.vs/
+*.user
+*.suo
+*.DotSettings.user
+
+# Published packages / archives
+/publish/
+*.zip
+
+# Local log samples (may contain secrets / passwords)
+/LOG/
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store

@@ -53,13 +53,18 @@ function prettyRaw(raw?: string) {
   return text;
 }
 
+function pathHasKind(path: string, kind: "SFC" | "SOLACE" | "TRACE") {
+  // webkit: PLCTYPE/SFC/a.log  |  directory picker: SFC/a.log
+  return path.split("/").some((seg) => seg === kind);
+}
+
 function collectEventsFromFiles(loaded: LogFile[]) {
   const events = [];
   for (const f of loaded) {
     const p = f.relativePath.replace(/\\/g, "/").toUpperCase();
-    if (p.includes("/SFC/")) events.push(...parseSfcLog(f.text, f.name));
-    else if (p.includes("/SOLACE/")) events.push(...parseSolaceLog(f.text, f.name));
-    else if (p.includes("/TRACE/")) {
+    if (pathHasKind(p, "SFC")) events.push(...parseSfcLog(f.text, f.name));
+    else if (pathHasKind(p, "SOLACE")) events.push(...parseSolaceLog(f.text, f.name));
+    else if (pathHasKind(p, "TRACE")) {
       if (isPcAscTrace(f.text)) events.push(...parsePcTraceLog(f.text, f.name));
       else events.push(...parseTraceLog(f.text, f.name, true));
     }
@@ -292,7 +297,7 @@ export default function TimeFloorApp() {
               spellCheck={false}
             />
             {suggestOpen && filteredLots.length > 0 && (
-              <ul className="lot-suggest" style={{ position: "absolute", left: 0, right: 0, top: "100%", zIndex: 20 }}>
+              <ul className="lot-suggest">
                 {filteredLots.map((lot) => (
                   <li
                     key={lot}

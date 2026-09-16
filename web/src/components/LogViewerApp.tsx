@@ -12,6 +12,7 @@ import {
   expandHitsToMessageBlocks,
   extractMessageBlocksInRange,
   guessLogDate,
+  type MessageBlock,
 } from "@/lib/logBlocks";
 
 function kindFromPath(path: string): string {
@@ -49,10 +50,67 @@ function rankLogFile(f: LogFile, q: string) {
   return { file: f, score, lineHits, nameHit, pathHit };
 }
 
-function blocksToText(
-  blocks: { lines: { text: string }[] }[]
-): string {
+function blocksToText(blocks: { lines: { text: string }[] }[]): string {
   return blocks.map((b) => b.lines.map((l) => l.text).join("\n")).join("\n\n");
+}
+
+type FileMessageHit = {
+  path: string;
+  block: MessageBlock;
+};
+
+/** Search every log in the folder for messages in date/time (and optional keyword). */
+function searchAllFilesInRange(
+  allFiles: LogFile[],
+  date: string,
+  timeFrom: string,
+  timeTo: string,
+  query: string
+): { hits: FileMessageHit[]; matchedFiles: number; scannedFiles: number } {
+  const q = query.trim();
+  const hits: FileMessageHit[] = [];
+  let matchedFiles = 0;
+
+  for (const f of allFiles) {
+    const text = f.text.replace(/\r\n/g, "\n");
+    const blocks = q
+      ? expandHitsToMessageBlocks(text, q, Number.POSITIVE_INFINITY, {
+          date,
+          timeFrom,
+          timeTo,
+        }).blocks
+      : extractMessageBlocksInRange(text, date, timeFrom, timeTo).blocks;
+
+    if (!blocks.length) continue;
+    matchedFiles++;
+    for (const block of blocks) {
+      hits.push({ path: f.relativePath, block });
+    }
+  }
+
+  hits.sort((a, b) => {
+    const ta = a.block.timestamp?.getTime() ?? 0;
+    const tb = b.block.timestamp?.getTime() ?? 0;
+    return ta - tb || a.path.localeCompare(b.path) || a.block.start - b.block.start;
+  });
+
+  return { hits, matchedFiles, scannedFiles: allFiles.length };
+}
+
+function fileHitsToText(hits: FileMessageHit[]): string {
+  const parts: string[] = [];
+  let lastPath = "";
+  for (const hit of hits) {
+    if (hit.path !== lastPath) {
+      if (parts.length) parts.push("");
+      parts.push(`========== ${hit.path} ==========`);
+      parts.push("");
+      lastPath = hit.path;
+    }
+    parts.push(hit.block.lines.map((l) => l.text).join("\n"));
+    parts.push("");
+  }
+  return parts.join("\n").trimEnd();
 }
 
 export default function LogViewerApp() {
@@ -96,11 +154,16 @@ export default function LogViewerApp() {
     setTimeContentQuery("");
   }
 
-  /** Toolbar search: content (optional) only inside the selected time range. */
+  /** Toolbar search: scan every file in the folder for the date/time window. */
   function runTimeSearch() {
     setTimeContentQuery(timeContentDraft.trim());
     setTimeSearchActive(true);
     setFullContentQuery("");
+  }
+
+  function selectFile(path: string) {
+    setTimeSearchActive(false);
+    startTransition(() => setSelectedPath(path));
   }
 
   const kinds = useMemo(() => {
@@ -149,6 +212,7 @@ export default function LogViewerApp() {
       return;
     }
     setError("");
+    setTimeSearchActive(false);
     startTransition(() => setSelectedPath(visibleFiles[0].relativePath));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only re-jump on new search/kind
   }, [fileFilter, kindFilter, searchEmpty]);
@@ -159,40 +223,36 @@ export default function LogViewerApp() {
   );
 
   const viewModel = useMemo(() => {
-    if (!selected) return null;
-    const text = selected.text.replace(/\r\n/g, "\n");
     const date = filterDate.trim();
+    const from = timeFrom || "00:00";
+    const to = timeTo || "23:59";
 
-    // Date/time-range search (toolbar button)
+    // Date/time search across the entire folder
     if (timeSearchActive) {
-      const from = timeFrom || "00:00";
-      const to = timeTo || "23:59";
+      if (!files.length) return null;
       const q = timeContentQuery.trim();
-      if (q) {
-        const expanded = expandHitsToMessageBlocks(text, q, Number.POSITIVE_INFINITY, {
-          date,
-          timeFrom: from,
-          timeTo: to,
-        });
-        return {
-          mode: "filter" as const,
-          source: "time" as const,
-          blocks: expanded.blocks,
-          text: blocksToText(expanded.blocks),
-          totalLines: expanded.totalLines,
-        };
-      }
-      const ranged = extractMessageBlocksInRange(text, date, from, to);
+      const { hits, matchedFiles, scannedFiles } = searchAllFilesInRange(
+        files,
+        date,
+        from,
+        to,
+        q
+      );
       return {
         mode: "filter" as const,
         source: "time" as const,
-        blocks: ranged.blocks,
-        text: blocksToText(ranged.blocks),
-        totalLines: ranged.totalLines,
+        blocks: hits.map((h) => h.block),
+        text: fileHitsToText(hits),
+        totalLines: 0,
+        matchedFiles,
+        scannedFiles,
       };
     }
 
-    // Sidebar search: entire file
+    if (!selected) return null;
+    const text = selected.text.replace(/\r\n/g, "\n");
+
+    // Sidebar search: entire selected file
     const fullQ = fullContentQuery.trim();
     if (fullQ) {
       const expanded = expandHitsToMessageBlocks(text, fullQ);
@@ -202,12 +262,15 @@ export default function LogViewerApp() {
         blocks: expanded.blocks,
         text: blocksToText(expanded.blocks),
         totalLines: expanded.totalLines,
+        matchedFiles: 1,
+        scannedFiles: 1,
       };
     }
 
     return { mode: "raw" as const, text, bytes: text.length };
   }, [
     selected,
+    files,
     fullContentQuery,
     timeSearchActive,
     timeContentQuery,
@@ -296,13 +359,19 @@ export default function LogViewerApp() {
       <header className="topbar compact">
         <div className="top-meta">
           {folderLabel ? `로그뷰어 · ${folderLabel}` : "로그 폴더를 선택하세요"}
-          {selected ? ` · ${selected.name}` : ""}
+          {timeSearchActive
+            ? ""
+            : selected
+              ? ` · ${selected.name}`
+              : ""}
           {viewModel?.mode === "raw"
             ? ` · ${(viewModel.bytes / 1024).toFixed(viewModel.bytes >= 102400 ? 0 : 1)} KB`
             : ""}
           {viewModel?.mode === "filter"
             ? ` · ${viewModel.blocks.length.toLocaleString()} msg${
-                viewModel.source === "time" ? " · 시간검색" : " · 전체검색"
+                viewModel.source === "time"
+                  ? ` · 폴더검색 ${viewModel.matchedFiles}/${viewModel.scannedFiles} files`
+                  : " · 전체검색"
               }`
             : ""}
         </div>
@@ -394,8 +463,10 @@ export default function LogViewerApp() {
             <button
               key={f.relativePath}
               type="button"
-              className={`log-file-item${selectedPath === f.relativePath ? " active" : ""}`}
-              onClick={() => startTransition(() => setSelectedPath(f.relativePath))}
+              className={`log-file-item${
+                !timeSearchActive && selectedPath === f.relativePath ? " active" : ""
+              }`}
+              onClick={() => selectFile(f.relativePath)}
               title={f.relativePath}
             >
               <span className="log-file-kind">{kindFromPath(f.relativePath)}</span>
@@ -449,7 +520,7 @@ export default function LogViewerApp() {
                 onKeyDown={(e) => {
                   if (e.key === "Enter") runTimeSearch();
                 }}
-                placeholder="날짜·시간대 내 키워드"
+                placeholder="폴더 전체 · 날짜·시간 키워드"
                 autoComplete="off"
                 spellCheck={false}
               />
@@ -457,17 +528,21 @@ export default function LogViewerApp() {
             <button
               type="button"
               className="btn primary"
-              disabled={busy || !selected}
+              disabled={busy || !files.length}
               onClick={runTimeSearch}
-              title="선택한 날짜·시간대에서만 내용 검색"
+              title="폴더 전체 파일을 날짜·시간으로 검색"
             >
               검색
             </button>
           </div>
         </div>
         <div className="log-view-body">
-          {!selected || !viewModel ? (
-            <div className="empty">왼쪽에서 로그 파일을 선택하세요.</div>
+          {!viewModel ? (
+            <div className="empty">
+              {files.length
+                ? "날짜·시간을 설정한 뒤 검색하거나, 왼쪽에서 로그 파일을 선택하세요."
+                : "왼쪽에서 로그 폴더를 선택하세요."}
+            </div>
           ) : viewModel.mode === "raw" ? (
             <pre className="log-lines log-lines-raw">{viewModel.text}</pre>
           ) : viewModel.blocks.length === 0 ? (
@@ -475,8 +550,8 @@ export default function LogViewerApp() {
               <span className="muted">
                 {viewModel.source === "time"
                   ? timeContentQuery.trim()
-                    ? "해당 날짜·시간대에서 검색어와 일치하는 메시지가 없습니다."
-                    : "선택한 날짜·시간 구간의 메시지가 없습니다."
+                    ? `폴더 ${viewModel.scannedFiles}개 파일에서 해당 날짜·시간대·검색어와 일치하는 메시지가 없습니다.`
+                    : `폴더 ${viewModel.scannedFiles}개 파일에서 선택한 날짜·시간 구간의 메시지가 없습니다.`
                   : "검색어와 일치하는 메시지가 없습니다."}
               </span>
             </pre>

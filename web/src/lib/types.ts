@@ -64,4 +64,6 @@ export interface LogFile {
   name: string;
   relativePath: string;
   text: string;
+  /** Kept so refresh can re-read without opening the folder picker again */
+  sourceFile?: File;
 }

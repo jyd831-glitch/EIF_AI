@@ -1,8 +1,14 @@
-"use client";
+﻿"use client";
 
 import { useMemo, useRef, useState } from "react";
 import type { LogFile, SequenceMessage, TimeFloorResult } from "@/lib/types";
-import { buildTimeFloor, collectLotIds, readFilesFromInput } from "@/lib/buildTimeFloor";
+import {
+  buildTimeFloor,
+  collectLotIds,
+  readFilesFromDirectoryHandle,
+  readFilesFromInput,
+  rereadLogFiles,
+} from "@/lib/buildTimeFloor";
 import { parseSfcLog } from "@/lib/parsers/sfc";
 import { parseSolaceLog } from "@/lib/parsers/solace";
 import { parseTraceLog } from "@/lib/parsers/trace";
@@ -47,9 +53,23 @@ function prettyRaw(raw?: string) {
   return text;
 }
 
+function collectEventsFromFiles(loaded: LogFile[]) {
+  const events = [];
+  for (const f of loaded) {
+    const p = f.relativePath.replace(/\\/g, "/").toUpperCase();
+    if (p.includes("/SFC/")) events.push(...parseSfcLog(f.text, f.name));
+    else if (p.includes("/SOLACE/")) events.push(...parseSolaceLog(f.text, f.name));
+    else if (p.includes("/TRACE/")) {
+      if (isPcAscTrace(f.text)) events.push(...parsePcTraceLog(f.text, f.name));
+      else events.push(...parseTraceLog(f.text, f.name, true));
+    }
+  }
+  return events;
+}
+
 export default function TimeFloorApp() {
   const fileRef = useRef<HTMLInputElement>(null);
-  const preserveLotOnPick = useRef(false);
+  const dirHandleRef = useRef<FileSystemDirectoryHandle | null>(null);
   const [files, setFiles] = useState<LogFile[]>([]);
   const [folderLabel, setFolderLabel] = useState("");
   const [lotId, setLotId] = useState("");
@@ -68,56 +88,114 @@ export default function TimeFloorApp() {
     return lotIds.filter((x) => x.toLowerCase().includes(q)).slice(0, 80);
   }, [lotId, lotIds]);
 
-  function openFolderPicker(preserveLot: boolean) {
-    preserveLotOnPick.current = preserveLot;
-    if (fileRef.current) {
-      // allow selecting the same folder again
-      fileRef.current.value = "";
-      fileRef.current.click();
+  async function applyLoadedFiles(
+    loaded: LogFile[],
+    labelRoot: string,
+    options: { preserveLot: boolean }
+  ) {
+    if (!loaded.length) throw new Error(".log 파일을 찾지 못했습니다.");
+    setFiles(loaded);
+    setFolderLabel(`${labelRoot} (${loaded.length} logs)`);
+
+    const events = collectEventsFromFiles(loaded);
+    setLotIds(collectLotIds(events));
+    setSelected(null);
+    setDetailOpen(false);
+
+    const previousLot = options.preserveLot ? lotId.trim() : "";
+    if (options.preserveLot && previousLot) {
+      setLotId(previousLot);
+      const built = buildTimeFloor(loaded, previousLot, includeBitOff);
+      setResult(built);
+      if (built.lotIds.length) setLotIds(built.lotIds);
+      if (!built.messages.length) setError(`LOTID "${previousLot}" 에 해당하는 시퀀스가 없습니다.`);
+      else setError("");
+    } else {
+      setLotId("");
+      setResult(null);
+      setError("");
+    }
+  }
+
+  async function browseFolder() {
+    setBusy(true);
+    setError("");
+    try {
+      if (typeof window !== "undefined" && "showDirectoryPicker" in window) {
+        const picker = (
+          window as Window & {
+            showDirectoryPicker: (options?: { mode?: "read" | "readwrite" }) => Promise<FileSystemDirectoryHandle>;
+          }
+        ).showDirectoryPicker;
+        const handle = await picker({ mode: "read" });
+        dirHandleRef.current = handle;
+        const loaded = await readFilesFromDirectoryHandle(handle);
+        await applyLoadedFiles(loaded, handle.name, { preserveLot: false });
+      } else if (fileRef.current) {
+        dirHandleRef.current = null;
+        fileRef.current.value = "";
+        fileRef.current.click();
+      } else {
+        throw new Error("이 브라우저에서는 폴더 선택이 지원되지 않습니다.");
+      }
+    } catch (e) {
+      if (!(e instanceof DOMException && e.name === "AbortError")) {
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    } finally {
+      setBusy(false);
     }
   }
 
   async function onPickFolder(list: FileList | null) {
     if (!list?.length) return;
-    const keepLot = preserveLotOnPick.current;
-    preserveLotOnPick.current = false;
-    const previousLot = keepLot ? lotId.trim() : "";
-
+    dirHandleRef.current = null;
     setBusy(true);
     setError("");
     try {
       const loaded = await readFilesFromInput(list);
-      if (!loaded.length) throw new Error(".log 파일을 찾지 못했습니다.");
-      setFiles(loaded);
-      const top = (list[0] as File & { webkitRelativePath?: string }).webkitRelativePath?.split(/[\\/]/)[0] || "선택됨";
-      setFolderLabel(`${top} (${loaded.length} logs)`);
+      const top =
+        (list[0] as File & { webkitRelativePath?: string }).webkitRelativePath?.split(/[\\/]/)[0] ||
+        "선택됨";
+      await applyLoadedFiles(loaded, top, { preserveLot: false });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
 
-      // prefetch lot ids without lot filter
-      const events = [];
-      for (const f of loaded) {
-        const p = f.relativePath.replace(/\\/g, "/").toUpperCase();
-        if (p.includes("/SFC/")) events.push(...parseSfcLog(f.text, f.name));
-        else if (p.includes("/SOLACE/")) events.push(...parseSolaceLog(f.text, f.name));
-        else if (p.includes("/TRACE/")) {
-          if (isPcAscTrace(f.text)) events.push(...parsePcTraceLog(f.text, f.name));
-          else events.push(...parseTraceLog(f.text, f.name, true));
+  async function refreshFolder() {
+    if (!files.length && !dirHandleRef.current) {
+      setError("로그 폴더를 먼저 선택하세요.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      let loaded: LogFile[] = [];
+      let labelRoot = folderLabel.split(" (")[0] || "선택됨";
+
+      if (dirHandleRef.current) {
+        const handle = dirHandleRef.current as FileSystemDirectoryHandle & {
+          queryPermission: (descriptor?: { mode?: "read" | "readwrite" }) => Promise<PermissionState>;
+          requestPermission: (descriptor?: { mode?: "read" | "readwrite" }) => Promise<PermissionState>;
+        };
+        let status = await handle.queryPermission({ mode: "read" });
+        if (status !== "granted") status = await handle.requestPermission({ mode: "read" });
+        if (status !== "granted") {
+          throw new Error("폴더 읽기 권한이 없습니다. 찾아보기로 다시 선택하세요.");
+        }
+        loaded = await readFilesFromDirectoryHandle(handle);
+        labelRoot = handle.name;
+      } else {
+        loaded = await rereadLogFiles(files);
+        if (!loaded.length) {
+          throw new Error("다시 읽을 파일이 없습니다. 찾아보기로 폴더를 다시 선택하세요.");
         }
       }
-      const nextLots = collectLotIds(events);
-      setLotIds(nextLots);
-      setSelected(null);
-      setDetailOpen(false);
 
-      if (keepLot && previousLot) {
-        setLotId(previousLot);
-        const built = buildTimeFloor(loaded, previousLot, includeBitOff);
-        setResult(built);
-        if (built.lotIds.length) setLotIds(built.lotIds);
-        if (!built.messages.length) setError(`LOTID "${previousLot}" 에 해당하는 시퀀스가 없습니다.`);
-      } else {
-        setLotId("");
-        setResult(null);
-      }
+      await applyLoadedFiles(loaded, labelRoot, { preserveLot: true });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -175,15 +253,15 @@ export default function TimeFloorApp() {
           <span>로그 폴더</span>
           <div className="folder-picker">
             <input readOnly value={folderLabel} placeholder="폴더 선택 (SFC/SOLACE/TRACE 포함)" />
-            <button type="button" className="btn" disabled={busy} onClick={() => openFolderPicker(false)}>
+            <button type="button" className="btn" disabled={busy} onClick={() => void browseFolder()}>
               찾아보기...
             </button>
             <button
               type="button"
               className="btn"
               disabled={busy || !files.length}
-              title="같은 폴더를 다시 선택해 최신 로그로 다시 읽습니다"
-              onClick={() => openFolderPicker(true)}
+              title="이전에 선택한 폴더를 다시 읽습니다"
+              onClick={() => void refreshFolder()}
             >
               새로고침
             </button>
@@ -193,7 +271,7 @@ export default function TimeFloorApp() {
               multiple
               hidden
               {...({ webkitdirectory: "", directory: "" } as Record<string, string>)}
-              onChange={(e) => onPickFolder(e.target.files)}
+              onChange={(e) => void onPickFolder(e.target.files)}
             />
           </div>
         </div>

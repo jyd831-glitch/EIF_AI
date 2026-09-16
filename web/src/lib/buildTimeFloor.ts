@@ -163,7 +163,53 @@ export async function readFilesFromInput(fileList: FileList): Promise<LogFile[]>
     if (!/\.log$/i.test(file.name)) continue;
     const relativePath = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
     const text = await file.text();
-    out.push({ name: file.name, relativePath, text });
+    out.push({ name: file.name, relativePath, text, sourceFile: file });
+  }
+  return out;
+}
+
+/** Re-read previously selected File handles (no folder dialog). */
+export async function rereadLogFiles(files: LogFile[]): Promise<LogFile[]> {
+  const out: LogFile[] = [];
+  for (const prev of files) {
+    if (!prev.sourceFile) continue;
+    if (!/\.log$/i.test(prev.sourceFile.name) && !/\.log$/i.test(prev.name)) continue;
+    const file = prev.sourceFile;
+    const relativePath =
+      (file as File & { webkitRelativePath?: string }).webkitRelativePath || prev.relativePath || file.name;
+    out.push({
+      name: file.name,
+      relativePath,
+      text: await file.text(),
+      sourceFile: file,
+    });
+  }
+  return out;
+}
+
+type DirHandle = FileSystemDirectoryHandle & {
+  entries: () => AsyncIterableIterator<[string, FileSystemHandle]>;
+};
+
+export async function readFilesFromDirectoryHandle(
+  root: FileSystemDirectoryHandle,
+  basePath = ""
+): Promise<LogFile[]> {
+  const out: LogFile[] = [];
+  for await (const [name, handle] of (root as DirHandle).entries()) {
+    const relativePath = basePath ? `${basePath}/${name}` : name;
+    if (handle.kind === "directory") {
+      out.push(...(await readFilesFromDirectoryHandle(handle as FileSystemDirectoryHandle, relativePath)));
+      continue;
+    }
+    if (!/\.log$/i.test(name)) continue;
+    const file = await (handle as FileSystemFileHandle).getFile();
+    out.push({
+      name,
+      relativePath,
+      text: await file.text(),
+      sourceFile: file,
+    });
   }
   return out;
 }

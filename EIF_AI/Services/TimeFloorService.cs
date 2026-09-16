@@ -517,7 +517,8 @@ public sealed partial class TimeFloorService
         void Flush()
         {
             if (cStart is null) return;
-            clusters.Add((cStart.Value.AddSeconds(-2), cEnd.AddSeconds(3), new HashSet<string>(positions, StringComparer.OrdinalIgnoreCase)));
+            // Pad so LOTID-less SFC (e.g. MSGID=2000) right after PLC lot request stays in range
+            clusters.Add((cStart.Value.AddSeconds(-3), cEnd.AddSeconds(10), new HashSet<string>(positions, StringComparer.OrdinalIgnoreCase)));
             cStart = null;
             positions.Clear();
         }
@@ -560,7 +561,11 @@ public sealed partial class TimeFloorService
                     continue;
                 }
 
-                if (e.Source == EventSource.Trace && e.LotId is null)
+                // Different LOTID → skip
+                if (!string.IsNullOrWhiteSpace(e.LotId))
+                    continue;
+
+                if (e.Source == EventSource.Trace)
                 {
                     if (posSet.Count == 0
                         || (e.Position is not null && posSet.Contains(e.Position))
@@ -571,16 +576,9 @@ public sealed partial class TimeFloorService
                     continue;
                 }
 
-                if (e.Source == EventSource.Sfc && e.LotId is null)
-                {
-                    var near = anchors.Any(a =>
-                        Math.Abs((a.Timestamp - e.Timestamp).TotalSeconds) <= 2
-                        && (string.IsNullOrEmpty(e.ProcId)
-                            || string.IsNullOrEmpty(a.ProcId)
-                            || string.Equals(a.ProcId, e.ProcId, StringComparison.OrdinalIgnoreCase)));
-                    if (near)
-                        selected.Add(e.Id);
-                }
+                // SFC / SOLACE without LOTID in the same time cluster (e.g. MESSAGE ID : 2000)
+                if (e.Source == EventSource.Sfc)
+                    selected.Add(e.Id);
             }
         }
 

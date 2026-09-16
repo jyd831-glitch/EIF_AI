@@ -24,9 +24,10 @@ function filterByLot(all: TimeFloorEvent[], lot: string): TimeFloorEvent[] {
 
   const flush = () => {
     if (!cStart) return;
+    // Pad so LOTID-less SFC (e.g. MSGID=2000) right after PLC lot request stays in range
     clusters.push({
-      start: new Date(cStart.getTime() - 2000),
-      end: new Date(cEnd.getTime() + 3000),
+      start: new Date(cStart.getTime() - 3000),
+      end: new Date(cEnd.getTime() + 10000),
       positions: new Set(positions),
     });
     cStart = null;
@@ -59,7 +60,10 @@ function filterByLot(all: TimeFloorEvent[], lot: string): TimeFloorEvent[] {
         selected.add(e.id);
         continue;
       }
-      if (e.source === "Trace" && !e.lotId) {
+      // Different LOTID → skip
+      if (e.lotId?.trim()) continue;
+
+      if (e.source === "Trace") {
         if (
           posSet.size === 0 ||
           (e.position && posSet.has(e.position)) ||
@@ -73,13 +77,10 @@ function filterByLot(all: TimeFloorEvent[], lot: string): TimeFloorEvent[] {
         }
         continue;
       }
-      if (e.source === "Sfc" && !e.lotId) {
-        const near = orderedAnchors.some(
-          (a) =>
-            Math.abs(a.timestamp.getTime() - e.timestamp.getTime()) / 1000 <= 2 &&
-            (!e.procId || !a.procId || a.procId.toLowerCase() === e.procId.toLowerCase())
-        );
-        if (near) selected.add(e.id);
+
+      // SFC / SOLACE without LOTID in the same time cluster (e.g. MESSAGE ID : 2000)
+      if (e.source === "Sfc") {
+        selected.add(e.id);
       }
     }
   }

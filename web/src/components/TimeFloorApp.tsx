@@ -90,6 +90,7 @@ export default function TimeFloorApp() {
         }
       }
       setLotIds(collectLotIds(events));
+      setLotId("");
       setResult(null);
       setSelected(null);
       setDetailOpen(false);

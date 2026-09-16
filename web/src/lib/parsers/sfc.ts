@@ -1,5 +1,6 @@
 import type { TimeFloorEvent } from "../types";
 import { isAlarm } from "../alarm";
+import { extractLotId } from "../lotId";
 import { sfcActors } from "../sequence";
 
 const HEADER =
@@ -79,7 +80,7 @@ export function parseSfcLog(text: string, fileName: string): TimeFloorEvent[] {
       title: label,
       direction,
       messageType: msgType,
-      lotId: fields.LOTID || undefined,
+      lotId: extractLotId(fields),
       position: fields.POSITION || undefined,
       procId: fields.PROCID || undefined,
       msgId: msgId || undefined,

@@ -203,7 +203,16 @@ export default function TimeFloorApp({ embedded = false }: { embedded?: boolean 
       setLotIds(built.lotIds.length ? built.lotIds : lotIds);
       setSelected(null);
       setDetailOpen(false);
-      if (!built.messages.length) setError(`LOTID "${lotId}" 에 해당하는 시퀀스가 없습니다.`);
+      if (!built.messages.length) {
+        setError(`LOTID "${lotId}" 에 해당하는 시퀀스가 없습니다.`);
+      } else {
+        const hasMes = built.messages.some((m) => m.from === "Mes" || m.to === "Mes");
+        if (!hasMes) {
+          setError(
+            "MES↔EIF 메시지가 없습니다. 해당 LOT/날짜의 SFC(또는 SOLACE) 로그가 폴더에 있는지 확인하세요. 지금은 TRACE(EIF↔PLC)만 표시됩니다."
+          );
+        }
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setResult(null);

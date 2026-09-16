@@ -5,8 +5,13 @@ const POS_RE = /_(\d{2})$/;
 
 export function sfcActors(direction?: string): { from: Actor; to: Actor } | null {
   if (!direction) return null;
-  if (/EQP->MES|EIF->MES/i.test(direction)) return { from: "Eif", to: "Mes" };
-  if (/MES->EQP|MES->EIF/i.test(direction)) return { from: "Mes", to: "Eif" };
+  const d = direction.trim();
+  if (/EQP\s*->\s*MES|EIF\s*->\s*MES|FROM\s*EQP|TO\s*MES|EQP\s*→\s*MES|EIF\s*→\s*MES/i.test(d)) {
+    return { from: "Eif", to: "Mes" };
+  }
+  if (/MES\s*->\s*EQP|MES\s*->\s*EIF|FROM\s*MES|TO\s*EQP|MES\s*→\s*EQP|MES\s*→\s*EIF/i.test(d)) {
+    return { from: "Mes", to: "Eif" };
+  }
   return null;
 }
 

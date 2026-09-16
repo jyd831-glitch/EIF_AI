@@ -4,13 +4,14 @@ import { parseSfcLog } from "./parsers/sfc";
 import { parseSolaceLog } from "./parsers/solace";
 import { parseTraceLog } from "./parsers/trace";
 import { isPcAscTrace, parsePcTraceLog } from "./parsers/pcTrace";
+import { collectLotCandidates, eventMatchesLot } from "./lotId";
 
 function normPath(p: string) {
   return p.replace(/\\/g, "/");
 }
 
 function filterByLot(all: TimeFloorEvent[], lot: string): TimeFloorEvent[] {
-  const anchors = all.filter((e) => e.lotId?.toLowerCase() === lot.toLowerCase());
+  const anchors = all.filter((e) => eventMatchesLot(e, lot));
   if (!anchors.length) return [];
 
   const selected = new Set<string>(anchors.map((a) => a.id));
@@ -56,12 +57,16 @@ function filterByLot(all: TimeFloorEvent[], lot: string): TimeFloorEvent[] {
   for (const { start, end, positions: posSet } of clusters) {
     for (const e of all) {
       if (e.timestamp < start || e.timestamp > end) continue;
-      if (e.lotId?.toLowerCase() === lot.toLowerCase()) {
+      if (eventMatchesLot(e, lot)) {
         selected.add(e.id);
         continue;
       }
-      // Different LOTID → skip
-      if (e.lotId?.trim()) continue;
+      // Different LOT / PLT / BCR identity → skip
+      const identities = collectLotCandidates(e.fields);
+      if (e.lotId?.trim() && !identities.some((v) => v.toLowerCase() === e.lotId!.toLowerCase())) {
+        identities.push(e.lotId);
+      }
+      if (identities.length > 0) continue;
 
       if (e.source === "Trace") {
         if (
@@ -78,7 +83,7 @@ function filterByLot(all: TimeFloorEvent[], lot: string): TimeFloorEvent[] {
         continue;
       }
 
-      // SFC / SOLACE without LOTID in the same time cluster (e.g. MESSAGE ID : 2000)
+      // SFC / SOLACE without LOT fields in the same time cluster (e.g. MESSAGE ID : 2000)
       if (e.source === "Sfc") {
         selected.add(e.id);
       }
@@ -109,9 +114,12 @@ export function groupLogFiles(files: LogFile[]) {
 }
 
 export function collectLotIds(events: TimeFloorEvent[]): string[] {
-  return [
-    ...new Set(events.map((e) => e.lotId).filter((x): x is string => !!x?.trim())),
-  ].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+  const set = new Set<string>();
+  for (const e of events) {
+    if (e.lotId?.trim()) set.add(e.lotId.trim());
+    for (const v of collectLotCandidates(e.fields)) set.add(v);
+  }
+  return [...set].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
 }
 
 export function buildTimeFloor(

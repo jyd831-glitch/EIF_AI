@@ -1,5 +1,6 @@
 import type { TimeFloorEvent } from "../types";
 import { isAlarm } from "../alarm";
+import { extractLotId } from "../lotId";
 import { buildBitWordSubLabel, extractPosition, friendlySignalName, traceActors } from "../sequence";
 
 const HEADER =
@@ -80,7 +81,7 @@ export function parseTraceLog(text: string, fileName: string, includeBitOff = tr
       title: label,
       direction: from === "Plc" ? "PLC->EIF" : "EIF->PLC",
       signal,
-      lotId: fields.LOTID || undefined,
+      lotId: extractLotId(fields),
       position: extractPosition(signal, fields),
       value: value || undefined,
       from,

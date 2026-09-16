@@ -49,6 +49,7 @@ function prettyRaw(raw?: string) {
 
 export default function TimeFloorApp() {
   const fileRef = useRef<HTMLInputElement>(null);
+  const preserveLotOnPick = useRef(false);
   const [files, setFiles] = useState<LogFile[]>([]);
   const [folderLabel, setFolderLabel] = useState("");
   const [lotId, setLotId] = useState("");
@@ -67,8 +68,21 @@ export default function TimeFloorApp() {
     return lotIds.filter((x) => x.toLowerCase().includes(q)).slice(0, 80);
   }, [lotId, lotIds]);
 
+  function openFolderPicker(preserveLot: boolean) {
+    preserveLotOnPick.current = preserveLot;
+    if (fileRef.current) {
+      // allow selecting the same folder again
+      fileRef.current.value = "";
+      fileRef.current.click();
+    }
+  }
+
   async function onPickFolder(list: FileList | null) {
     if (!list?.length) return;
+    const keepLot = preserveLotOnPick.current;
+    preserveLotOnPick.current = false;
+    const previousLot = keepLot ? lotId.trim() : "";
+
     setBusy(true);
     setError("");
     try {
@@ -89,11 +103,21 @@ export default function TimeFloorApp() {
           else events.push(...parseTraceLog(f.text, f.name, true));
         }
       }
-      setLotIds(collectLotIds(events));
-      setLotId("");
-      setResult(null);
+      const nextLots = collectLotIds(events);
+      setLotIds(nextLots);
       setSelected(null);
       setDetailOpen(false);
+
+      if (keepLot && previousLot) {
+        setLotId(previousLot);
+        const built = buildTimeFloor(loaded, previousLot, includeBitOff);
+        setResult(built);
+        if (built.lotIds.length) setLotIds(built.lotIds);
+        if (!built.messages.length) setError(`LOTID "${previousLot}" 에 해당하는 시퀀스가 없습니다.`);
+      } else {
+        setLotId("");
+        setResult(null);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -151,8 +175,17 @@ export default function TimeFloorApp() {
           <span>로그 폴더</span>
           <div className="folder-picker">
             <input readOnly value={folderLabel} placeholder="폴더 선택 (SFC/SOLACE/TRACE 포함)" />
-            <button type="button" className="btn" onClick={() => fileRef.current?.click()}>
+            <button type="button" className="btn" disabled={busy} onClick={() => openFolderPicker(false)}>
               찾아보기...
+            </button>
+            <button
+              type="button"
+              className="btn"
+              disabled={busy || !files.length}
+              title="같은 폴더를 다시 선택해 최신 로그로 다시 읽습니다"
+              onClick={() => openFolderPicker(true)}
+            >
+              새로고침
             </button>
             <input
               ref={fileRef}

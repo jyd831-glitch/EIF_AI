@@ -140,11 +140,13 @@ body {
 
 .folder-picker {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: 1fr 1fr;
   gap: 0.4rem;
 }
 .folder-picker input {
+  grid-column: 1 / -1;
   width: 100%;
+  min-width: 0;
   padding: 0.55rem 0.65rem;
   border-radius: 8px;
   border: 1px solid var(--line);
@@ -152,6 +154,9 @@ body {
   color: var(--text);
   font-family: var(--mono);
   font-size: 0.8rem;
+}
+.folder-picker .btn {
+  white-space: nowrap;
 }
 
 .modal.hidden { display: none; }

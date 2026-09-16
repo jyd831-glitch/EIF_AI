@@ -111,10 +111,28 @@ function buildBlock(
   };
 }
 
+export type TimeFilterOpts = {
+  date?: string;
+  timeFrom?: string;
+  timeTo?: string;
+};
+
+function passesTimeFilter(block: MessageBlock, opts?: TimeFilterOpts): boolean {
+  if (!opts) return true;
+  const date = opts.date ?? "";
+  const timeFrom = opts.timeFrom ?? "";
+  const timeTo = opts.timeTo ?? "";
+  if (!date.trim() && !timeFrom.trim() && !timeTo.trim()) return true;
+  if (!block.timestamp) return !date.trim();
+  return isTimestampInRange(block.timestamp, date, timeFrom, timeTo);
+}
+
+/** Expand keyword hits to full message blocks. Optional time filter is applied while collecting so early hits outside the window do not starve later matches. */
 export function expandHitsToMessageBlocks(
   text: string,
   query: string,
-  maxBlocks = 200
+  maxBlocks = Number.POSITIVE_INFINITY,
+  timeOpts?: TimeFilterOpts
 ): { blocks: MessageBlock[]; truncated: boolean; totalLines: number } {
   const lines = text.replace(/\r\n/g, "\n").split("\n");
   const q = query.trim().toLowerCase();
@@ -127,31 +145,37 @@ export function expandHitsToMessageBlocks(
 
   const seen = new Set<string>();
   const blocks: MessageBlock[] = [];
+  let truncated = false;
 
   for (const hit of hitIndexes) {
     const { start, end } = findMessageBlockRange(lines, hit);
     const key = `${start}:${end}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    blocks.push(buildBlock(lines, start, end, query));
+    const block = buildBlock(lines, start, end, query);
+    if (!passesTimeFilter(block, timeOpts)) continue;
+    blocks.push(block);
     if (blocks.length >= maxBlocks) {
-      return { blocks, truncated: true, totalLines: lines.length };
+      truncated = true;
+      break;
     }
   }
 
-  return { blocks, truncated: false, totalLines: lines.length };
+  return { blocks, truncated, totalLines: lines.length };
 }
 
+/** Collect every message block whose header timestamp falls in the range (no default cap). */
 export function extractMessageBlocksInRange(
   text: string,
   date: string,
   timeFrom: string,
   timeTo: string,
-  maxBlocks = 500
+  maxBlocks = Number.POSITIVE_INFINITY
 ): { blocks: MessageBlock[]; truncated: boolean; totalLines: number } {
   const lines = text.replace(/\r\n/g, "\n").split("\n");
   const blocks: MessageBlock[] = [];
   let i = 0;
+  let truncated = false;
   while (i < lines.length) {
     if (!isLogMessageHeader(lines[i])) {
       i++;
@@ -163,12 +187,13 @@ export function extractMessageBlocksInRange(
     if (!ts || isTimestampInRange(ts, date, timeFrom, timeTo)) {
       blocks.push(block);
       if (blocks.length >= maxBlocks) {
-        return { blocks, truncated: true, totalLines: lines.length };
+        truncated = true;
+        break;
       }
     }
     i = end + 1;
   }
-  return { blocks, truncated: false, totalLines: lines.length };
+  return { blocks, truncated, totalLines: lines.length };
 }
 
 export function filterBlocksByTimeRange(

@@ -10,7 +10,6 @@ import {
 import {
   expandHitsToMessageBlocks,
   extractMessageBlocksInRange,
-  filterBlocksByTimeRange,
 } from "@/lib/logBlocks";
 
 function kindFromPath(path: string): string {
@@ -135,18 +134,20 @@ export default function LogViewerApp() {
 
   const hasTimeWindow = !(timeFrom === "00:00" && timeTo === "23:59");
 
-  const MAX_FILTER_BLOCKS = 200;
   const viewModel = useMemo(() => {
     if (!selected) return null;
     const text = selected.text.replace(/\r\n/g, "\n");
     const q = contentQuery.trim();
+    const timeOpts = hasTimeWindow
+      ? { date: "", timeFrom: timeFrom || "00:00", timeTo: timeTo || "23:59" }
+      : undefined;
 
     if (q) {
-      const expanded = expandHitsToMessageBlocks(text, q, MAX_FILTER_BLOCKS);
-      const blocks = filterBlocksByTimeRange(expanded.blocks, "", timeFrom, timeTo);
+      // Time filter applied while collecting so matches later in the file are not dropped.
+      const expanded = expandHitsToMessageBlocks(text, q, Number.POSITIVE_INFINITY, timeOpts);
       return {
         mode: "filter" as const,
-        blocks,
+        blocks: expanded.blocks,
         truncated: expanded.truncated,
         totalLines: expanded.totalLines,
       };
@@ -157,8 +158,7 @@ export default function LogViewerApp() {
         text,
         "",
         timeFrom || "00:00",
-        timeTo || "23:59",
-        MAX_FILTER_BLOCKS
+        timeTo || "23:59"
       );
       return {
         mode: "filter" as const,
@@ -388,22 +388,12 @@ export default function LogViewerApp() {
             </pre>
           ) : (
             <div className="log-blocks">
-              {viewModel.truncated && (
-                <div className="log-block-note muted">
-                  메시지 블록이 {MAX_FILTER_BLOCKS.toLocaleString()}개를 넘어 일부만 표시합니다. (전체{" "}
-                  {viewModel.totalLines.toLocaleString()} lines)
-                </div>
-              )}
-              {viewModel.blocks.map((block) => (
-                <pre key={`${block.start}-${block.end}`} className="log-lines log-block">
-                  {block.lines.map(({ n, text, hit }) => (
-                    <div key={n} className={`log-line${hit ? " hit" : ""}`}>
-                      <span className="log-ln">{n}</span>
-                      <span className="log-tx">{text || " "}</span>
-                    </div>
-                  ))}
-                </pre>
-              ))}
+              {/* Single pre keeps large time-window results scrollable and complete */}
+              <pre className="log-lines log-lines-raw">
+                {viewModel.blocks
+                  .map((block) => block.lines.map((l) => l.text).join("\n"))
+                  .join("\n\n")}
+              </pre>
             </div>
           )}
         </div>

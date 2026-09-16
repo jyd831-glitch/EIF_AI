@@ -732,7 +732,7 @@ pre.raw {
 .time-filter-row {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
+  align-items: flex-end;
   gap: 0.55rem 0.75rem;
 }
 .time-filter-row .field.inline {
@@ -748,6 +748,24 @@ pre.raw {
   background: var(--panel-2);
   font-family: var(--mono);
   font-size: 0.82rem;
+}
+.time-filter-row .time-content-search {
+  flex: 1 1 14rem;
+  min-width: 12rem;
+  max-width: 28rem;
+}
+.time-filter-row .time-content-search input {
+  width: 100%;
+  min-width: 0;
+  padding: 0.4rem 0.55rem;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  font-family: var(--mono);
+  font-size: 0.82rem;
+}
+.time-filter-row > .btn {
+  flex-shrink: 0;
 }
 .time-sep {
   color: var(--muted);

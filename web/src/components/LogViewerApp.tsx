@@ -8,8 +8,10 @@ import {
   rereadLogFiles,
 } from "@/lib/buildTimeFloor";
 import {
+  dateFromFileName,
   expandHitsToMessageBlocks,
   extractMessageBlocksInRange,
+  guessLogDate,
 } from "@/lib/logBlocks";
 
 function kindFromPath(path: string): string {
@@ -47,6 +49,12 @@ function rankLogFile(f: LogFile, q: string) {
   return { file: f, score, lineHits, nameHit, pathHit };
 }
 
+function blocksToText(
+  blocks: { lines: { text: string }[] }[]
+): string {
+  return blocks.map((b) => b.lines.map((l) => l.text).join("\n")).join("\n\n");
+}
+
 export default function LogViewerApp() {
   const fileRef = useRef<HTMLInputElement>(null);
   const dirHandleRef = useRef<FileSystemDirectoryHandle | null>(null);
@@ -54,11 +62,20 @@ export default function LogViewerApp() {
   const [folderLabel, setFolderLabel] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+
+  // Sidebar: file list + whole-file content search
   const [fileFilterDraft, setFileFilterDraft] = useState("");
   const [fileFilter, setFileFilter] = useState("");
-  const [contentQuery, setContentQuery] = useState("");
+  const [fullContentQuery, setFullContentQuery] = useState("");
+
+  // Toolbar: date + time window + content search within that window
+  const [filterDate, setFilterDate] = useState("");
   const [timeFrom, setTimeFrom] = useState("00:00");
   const [timeTo, setTimeTo] = useState("23:59");
+  const [timeContentDraft, setTimeContentDraft] = useState("");
+  const [timeContentQuery, setTimeContentQuery] = useState("");
+  const [timeSearchActive, setTimeSearchActive] = useState(false);
+
   const [selectedPath, setSelectedPath] = useState<string>("");
   const [kindFilter, setKindFilter] = useState<string>("ALL");
 
@@ -70,10 +87,20 @@ export default function LogViewerApp() {
     el.setAttribute("multiple", "");
   }, []);
 
+  /** Sidebar search: whole log file (no time filter). */
   function runFileSearch() {
     const q = fileFilterDraft.trim();
     setFileFilter(q);
-    setContentQuery(q); // 본문도 같은 키워드로 관련 메시지 블록 표시
+    setFullContentQuery(q);
+    setTimeSearchActive(false);
+    setTimeContentQuery("");
+  }
+
+  /** Toolbar search: content (optional) only inside the selected time range. */
+  function runTimeSearch() {
+    setTimeContentQuery(timeContentDraft.trim());
+    setTimeSearchActive(true);
+    setFullContentQuery("");
   }
 
   const kinds = useMemo(() => {
@@ -114,7 +141,6 @@ export default function LogViewerApp() {
     };
   }, [files, fileFilter, kindFilter]);
 
-  // 검색어가 바뀌면 관련도 1위 로그로 이동 (파일 클릭 선택은 유지되도록 selectedPath는 deps에서 제외)
   useEffect(() => {
     if (!fileFilter.trim()) return;
     if (searchEmpty) {
@@ -132,44 +158,63 @@ export default function LogViewerApp() {
     [files, selectedPath]
   );
 
-  const hasTimeWindow = !(timeFrom === "00:00" && timeTo === "23:59");
-
   const viewModel = useMemo(() => {
     if (!selected) return null;
     const text = selected.text.replace(/\r\n/g, "\n");
-    const q = contentQuery.trim();
-    const timeOpts = hasTimeWindow
-      ? { date: "", timeFrom: timeFrom || "00:00", timeTo: timeTo || "23:59" }
-      : undefined;
+    const date = filterDate.trim();
 
-    if (q) {
-      // Time filter applied while collecting so matches later in the file are not dropped.
-      const expanded = expandHitsToMessageBlocks(text, q, Number.POSITIVE_INFINITY, timeOpts);
+    // Date/time-range search (toolbar button)
+    if (timeSearchActive) {
+      const from = timeFrom || "00:00";
+      const to = timeTo || "23:59";
+      const q = timeContentQuery.trim();
+      if (q) {
+        const expanded = expandHitsToMessageBlocks(text, q, Number.POSITIVE_INFINITY, {
+          date,
+          timeFrom: from,
+          timeTo: to,
+        });
+        return {
+          mode: "filter" as const,
+          source: "time" as const,
+          blocks: expanded.blocks,
+          text: blocksToText(expanded.blocks),
+          totalLines: expanded.totalLines,
+        };
+      }
+      const ranged = extractMessageBlocksInRange(text, date, from, to);
       return {
         mode: "filter" as const,
-        blocks: expanded.blocks,
-        truncated: expanded.truncated,
-        totalLines: expanded.totalLines,
-      };
-    }
-
-    if (hasTimeWindow) {
-      const ranged = extractMessageBlocksInRange(
-        text,
-        "",
-        timeFrom || "00:00",
-        timeTo || "23:59"
-      );
-      return {
-        mode: "filter" as const,
+        source: "time" as const,
         blocks: ranged.blocks,
-        truncated: ranged.truncated,
+        text: blocksToText(ranged.blocks),
         totalLines: ranged.totalLines,
       };
     }
 
+    // Sidebar search: entire file
+    const fullQ = fullContentQuery.trim();
+    if (fullQ) {
+      const expanded = expandHitsToMessageBlocks(text, fullQ);
+      return {
+        mode: "filter" as const,
+        source: "full" as const,
+        blocks: expanded.blocks,
+        text: blocksToText(expanded.blocks),
+        totalLines: expanded.totalLines,
+      };
+    }
+
     return { mode: "raw" as const, text, bytes: text.length };
-  }, [selected, contentQuery, timeFrom, timeTo, hasTimeWindow]);
+  }, [
+    selected,
+    fullContentQuery,
+    timeSearchActive,
+    timeContentQuery,
+    filterDate,
+    timeFrom,
+    timeTo,
+  ]);
 
   async function applyLoaded(loaded: LogFile[], labelRoot: string) {
     if (!loaded.length) throw new Error(".log 파일을 찾지 못했습니다.");
@@ -177,7 +222,17 @@ export default function LogViewerApp() {
     setFolderLabel(`${labelRoot} (${loaded.length} logs)`);
     setError("");
     const keep = loaded.find((f) => f.relativePath === selectedPath);
-    setSelectedPath(keep ? keep.relativePath : loaded[0]?.relativePath || "");
+    const next = keep || loaded[0];
+    setSelectedPath(next?.relativePath || "");
+
+    // Prefer date from selected/first log so multi-day folders start filtered usefully
+    if (!filterDate.trim() && next) {
+      const d =
+        dateFromFileName(next.name) ||
+        dateFromFileName(next.relativePath) ||
+        guessLogDate(next.text);
+      if (d) setFilterDate(d);
+    }
   }
 
   async function onPickFolder(list: FileList | null) {
@@ -222,7 +277,6 @@ export default function LogViewerApp() {
         loaded = await readFilesFromDirectoryHandle(handle);
         labelRoot = handle.name;
       } else {
-        // Re-read previously selected files without opening Explorer
         loaded = await rereadLogFiles(files);
         if (!loaded.length) {
           throw new Error("다시 읽을 파일이 없습니다. 찾아보기로 폴더를 다시 선택하세요.");
@@ -247,7 +301,9 @@ export default function LogViewerApp() {
             ? ` · ${(viewModel.bytes / 1024).toFixed(viewModel.bytes >= 102400 ? 0 : 1)} KB`
             : ""}
           {viewModel?.mode === "filter"
-            ? ` · ${viewModel.blocks.length.toLocaleString()} msg`
+            ? ` · ${viewModel.blocks.length.toLocaleString()} msg${
+                viewModel.source === "time" ? " · 시간검색" : " · 전체검색"
+              }`
             : ""}
         </div>
       </header>
@@ -291,7 +347,7 @@ export default function LogViewerApp() {
         </div>
 
         <div className="field">
-          <span>파일 / 내용 검색</span>
+          <span>파일 / 내용 검색 (전체)</span>
           <div className="search-row">
             <input
               value={fileFilterDraft}
@@ -303,7 +359,12 @@ export default function LogViewerApp() {
               autoComplete="off"
               spellCheck={false}
             />
-            <button type="button" className="btn primary" disabled={busy || !files.length} onClick={runFileSearch}>
+            <button
+              type="button"
+              className="btn primary"
+              disabled={busy || !files.length}
+              onClick={runFileSearch}
+            >
               검색
             </button>
           </div>
@@ -353,6 +414,14 @@ export default function LogViewerApp() {
         <div className="log-view-toolbar">
           <div className="time-filter-row">
             <label className="field inline">
+              <span>날짜</span>
+              <input
+                type="date"
+                value={filterDate}
+                onChange={(e) => setFilterDate(e.target.value)}
+              />
+            </label>
+            <label className="field inline">
               <span>시간</span>
               <input
                 type="time"
@@ -371,6 +440,29 @@ export default function LogViewerApp() {
                 onChange={(e) => setTimeTo(e.target.value)}
               />
             </label>
+
+            <label className="field inline time-content-search">
+              <span>내용 검색</span>
+              <input
+                value={timeContentDraft}
+                onChange={(e) => setTimeContentDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") runTimeSearch();
+                }}
+                placeholder="날짜·시간대 내 키워드"
+                autoComplete="off"
+                spellCheck={false}
+              />
+            </label>
+            <button
+              type="button"
+              className="btn primary"
+              disabled={busy || !selected}
+              onClick={runTimeSearch}
+              title="선택한 날짜·시간대에서만 내용 검색"
+            >
+              검색
+            </button>
           </div>
         </div>
         <div className="log-view-body">
@@ -381,19 +473,16 @@ export default function LogViewerApp() {
           ) : viewModel.blocks.length === 0 ? (
             <pre className="log-lines">
               <span className="muted">
-                {contentQuery.trim()
-                  ? "검색어/시간 조건에 맞는 메시지가 없습니다."
-                  : "선택한 시간 구간의 메시지가 없습니다."}
+                {viewModel.source === "time"
+                  ? timeContentQuery.trim()
+                    ? "해당 날짜·시간대에서 검색어와 일치하는 메시지가 없습니다."
+                    : "선택한 날짜·시간 구간의 메시지가 없습니다."
+                  : "검색어와 일치하는 메시지가 없습니다."}
               </span>
             </pre>
           ) : (
             <div className="log-blocks">
-              {/* Single pre keeps large time-window results scrollable and complete */}
-              <pre className="log-lines log-lines-raw">
-                {viewModel.blocks
-                  .map((block) => block.lines.map((l) => l.text).join("\n"))
-                  .join("\n\n")}
-              </pre>
+              <pre className="log-lines log-lines-raw">{viewModel.text}</pre>
             </div>
           )}
         </div>

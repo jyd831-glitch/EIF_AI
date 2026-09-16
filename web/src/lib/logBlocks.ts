@@ -183,8 +183,7 @@ export function extractMessageBlocksInRange(
     }
     const { start, end } = findMessageBlockRange(lines, i);
     const block = buildBlock(lines, start, end, "");
-    const ts = block.timestamp;
-    if (!ts || isTimestampInRange(ts, date, timeFrom, timeTo)) {
+    if (passesTimeFilter(block, { date, timeFrom, timeTo })) {
       blocks.push(block);
       if (blocks.length >= maxBlocks) {
         truncated = true;
@@ -212,4 +211,50 @@ export function filterBlocksByTimeRange(
 export function guessLogDate(text: string): string {
   const m = text.match(/(\d{4}-\d{2}-\d{2})/);
   return m?.[1] || "";
+}
+
+/** Convert YYMMDD → YYYY-MM-DD (years 00–69 → 2000s). */
+export function yymmddToIso(yymmdd: string): string | null {
+  if (!/^\d{6}$/.test(yymmdd)) return null;
+  const yy = Number(yymmdd.slice(0, 2));
+  const mo = yymmdd.slice(2, 4);
+  const dd = yymmdd.slice(4, 6);
+  const year = yy >= 70 ? 1900 + yy : 2000 + yy;
+  const iso = `${year}-${mo}-${dd}`;
+  const dt = new Date(`${iso}T00:00:00`);
+  if (Number.isNaN(dt.getTime())) return null;
+  return iso;
+}
+
+/** Extract YYYY-MM-DD from log file name/path (`_250916.log`, `20250916`, `2025-09-16`). */
+export function dateFromFileName(nameOrPath: string): string | null {
+  const base = nameOrPath.replace(/\\/g, "/").split("/").pop() || nameOrPath;
+  const iso = base.match(/(20\d{2}|19\d{2})-(\d{2})-(\d{2})/);
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+  const ymd8 = base.match(/(?:^|[_\-.])((?:20|19)\d{6})(?:[_\-.]|\.|$)/);
+  if (ymd8) {
+    const s = ymd8[1];
+    return `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}`;
+  }
+  const ymd6 = base.match(/_(\d{6})(?:\.|$)/);
+  if (ymd6) return yymmddToIso(ymd6[1]);
+  return null;
+}
+
+/** Whether a log file is associated with the given YYYY-MM-DD. */
+export function fileMatchesDate(
+  file: { name: string; relativePath: string; text: string },
+  date: string
+): boolean {
+  const d = date.trim();
+  if (!d) return true;
+  const fromName =
+    dateFromFileName(file.name) || dateFromFileName(file.relativePath);
+  if (fromName) return fromName === d;
+  if (file.text.includes(d)) return true;
+  const compact = d.replace(/-/g, "");
+  if (compact.length === 8 && file.text.includes(compact)) return true;
+  const guessed = guessLogDate(file.text);
+  if (guessed) return guessed === d;
+  return false;
 }

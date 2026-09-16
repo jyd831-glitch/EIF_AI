@@ -426,7 +426,7 @@ function DetailBody({ msg }: { msg: SequenceMessage }) {
         <div>{fmtDateTime(msg.timestamp)}</div>
         <div>From</div>
         <div>
-          {msg.from} → {msg.to}
+          {msg.from.toUpperCase()} → {msg.to.toUpperCase()}
         </div>
         <div>Label</div>
         <div>{msg.label || ""}</div>

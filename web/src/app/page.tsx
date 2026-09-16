@@ -1,5 +1,5 @@
-import TimeFloorApp from "@/components/TimeFloorApp";
+import AppShell from "@/components/AppShell";
 
 export default function Home() {
-  return <TimeFloorApp />;
+  return <AppShell />;
 }

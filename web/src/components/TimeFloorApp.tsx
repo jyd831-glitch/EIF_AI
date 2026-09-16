@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { LogFile, SequenceMessage, TimeFloorResult } from "@/lib/types";
 import {
   buildTimeFloor,
@@ -72,7 +72,7 @@ function collectEventsFromFiles(loaded: LogFile[]) {
   return events;
 }
 
-export default function TimeFloorApp() {
+export default function TimeFloorApp({ embedded = false }: { embedded?: boolean }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const dirHandleRef = useRef<FileSystemDirectoryHandle | null>(null);
   const [files, setFiles] = useState<LogFile[]>([]);
@@ -86,6 +86,14 @@ export default function TimeFloorApp() {
   const [result, setResult] = useState<TimeFloorResult | null>(null);
   const [selected, setSelected] = useState<SequenceMessage | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
+
+  useEffect(() => {
+    const el = fileRef.current;
+    if (!el) return;
+    el.setAttribute("webkitdirectory", "");
+    el.setAttribute("directory", "");
+    el.setAttribute("multiple", "");
+  }, []);
 
   const filteredLots = useMemo(() => {
     const q = lotId.trim().toLowerCase();
@@ -119,36 +127,6 @@ export default function TimeFloorApp() {
       setLotId("");
       setResult(null);
       setError("");
-    }
-  }
-
-  async function browseFolder() {
-    setBusy(true);
-    setError("");
-    try {
-      if (typeof window !== "undefined" && "showDirectoryPicker" in window) {
-        const picker = (
-          window as Window & {
-            showDirectoryPicker: (options?: { mode?: "read" | "readwrite" }) => Promise<FileSystemDirectoryHandle>;
-          }
-        ).showDirectoryPicker;
-        const handle = await picker({ mode: "read" });
-        dirHandleRef.current = handle;
-        const loaded = await readFilesFromDirectoryHandle(handle);
-        await applyLoadedFiles(loaded, handle.name, { preserveLot: false });
-      } else if (fileRef.current) {
-        dirHandleRef.current = null;
-        fileRef.current.value = "";
-        fileRef.current.click();
-      } else {
-        throw new Error("이 브라우저에서는 폴더 선택이 지원되지 않습니다.");
-      }
-    } catch (e) {
-      if (!(e instanceof DOMException && e.name === "AbortError")) {
-        setError(e instanceof Error ? e.message : String(e));
-      }
-    } finally {
-      setBusy(false);
     }
   }
 
@@ -238,19 +216,29 @@ export default function TimeFloorApp() {
 
   return (
     <div className={`app${detailOpen ? " detail-open" : ""}`}>
-      <header className="topbar">
-        <div className="brand">
-          <span className="brand-mark">EIF</span>
-          <div>
-            <h1>TimeFloor Viewer</h1>
-            <p>MES · EIF · PLC sequence diagram (Vercel)</p>
+      <header className={`topbar${embedded ? " compact" : ""}`}>
+        {embedded ? (
+          <div className="top-meta">
+            {result
+              ? `타임플로어 · ${result.logType} · LOT ${result.lotId} · ${messages.length} messages`
+              : "타임플로어 · 로그 폴더와 LOTID를 선택하세요"}
           </div>
-        </div>
-        <div className="top-meta">
-          {result
-            ? `${result.logType} · LOT ${result.lotId} · ${messages.length} messages`
-            : "로그 폴더와 LOTID를 선택하세요"}
-        </div>
+        ) : (
+          <>
+            <div className="brand">
+              <span className="brand-mark">EIF</span>
+              <div>
+                <h1>TimeFloor Viewer</h1>
+                <p>MES · EIF · PLC sequence diagram (Vercel)</p>
+              </div>
+            </div>
+            <div className="top-meta">
+              {result
+                ? `${result.logType} · LOT ${result.lotId} · ${messages.length} messages`
+                : "로그 폴더와 LOTID를 선택하세요"}
+            </div>
+          </>
+        )}
       </header>
 
       <aside className="sidebar">
@@ -258,9 +246,20 @@ export default function TimeFloorApp() {
           <span>로그 폴더</span>
           <div className="folder-picker">
             <input readOnly value={folderLabel} placeholder="폴더 선택 (SFC/SOLACE/TRACE 포함)" />
-            <button type="button" className="btn" disabled={busy} onClick={() => void browseFolder()}>
+            <label
+              htmlFor="timefloor-folder-input"
+              className={`btn${busy ? " is-disabled" : ""}`}
+              aria-disabled={busy}
+              onClick={(e) => {
+                if (busy) {
+                  e.preventDefault();
+                  return;
+                }
+                if (fileRef.current) fileRef.current.value = "";
+              }}
+            >
               찾아보기...
-            </button>
+            </label>
             <button
               type="button"
               className="btn"
@@ -271,11 +270,11 @@ export default function TimeFloorApp() {
               새로고침
             </button>
             <input
+              id="timefloor-folder-input"
               ref={fileRef}
+              className="folder-file-input"
               type="file"
               multiple
-              hidden
-              {...({ webkitdirectory: "", directory: "" } as Record<string, string>)}
               onChange={(e) => void onPickFolder(e.target.files)}
             />
           </div>

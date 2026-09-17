@@ -9,6 +9,7 @@ import {
   readFilesFromInput,
   rereadLogFiles,
 } from "@/lib/buildTimeFloor";
+import { formatMessagePayload } from "@/lib/formatPayload";
 import { parseSfcLog } from "@/lib/parsers/sfc";
 import { parseSolaceLog } from "@/lib/parsers/solace";
 import { parseTraceLog } from "@/lib/parsers/trace";
@@ -33,24 +34,7 @@ function fmtDateTime(d?: Date) {
 }
 
 function prettyRaw(raw?: string) {
-  if (!raw) return "";
-  const text = raw.replace(/\r\n/g, "\n").trim();
-  const sep = text.match(/\s:\s(?=[{\[<])/);
-  let body = text;
-  let header = "";
-  if (sep?.index != null) {
-    header = text.slice(0, sep.index).trimEnd();
-    body = text.slice(sep.index + sep[0].length).trim();
-  }
-  try {
-    if ((body.startsWith("{") && body.endsWith("}")) || (body.startsWith("[") && body.endsWith("]"))) {
-      const formatted = JSON.stringify(JSON.parse(body), null, 2);
-      return header ? `${header}\n${formatted}` : formatted;
-    }
-  } catch {
-    /* keep raw */
-  }
-  return text;
+  return formatMessagePayload(raw);
 }
 
 function pathHasKind(path: string, kind: "SFC" | "SOLACE" | "TRACE") {
@@ -537,11 +521,22 @@ function FieldPairs({ entries, empty }: { entries: [string, string][]; empty: st
 
 function DetailBody({ msg }: { msg: SequenceMessage }) {
   const isTrace = msg.source === "Trace";
-  const bitEntries = Object.entries(msg.fields || {});
+  const isMesEif = (msg.from === "Mes" || msg.to === "Mes") && (msg.from === "Eif" || msg.to === "Eif");
+  const kind = msg.fields?.KIND || "";
+  const bitEntries = Object.entries(msg.fields || {}).filter(
+    ([, v]) => v != null && String(v).length < 500
+  );
   const wordEntries = Object.entries(msg.wordFields || {});
   const hasWord = wordEntries.length > 0 || !!msg.wordRawSnippet;
   const raw = prettyRaw(msg.rawSnippet);
   const wordRaw = prettyRaw(msg.wordRawSnippet);
+  const dataTitle = isTrace
+    ? "Bit Raw"
+    : kind === "RECEIVE_REPLYQ"
+      ? "Message DATA (REPLY)"
+      : kind === "REQUEST"
+        ? "Message DATA (REQUEST)"
+        : "Message DATA";
 
   return (
     <div>
@@ -556,16 +551,36 @@ function DetailBody({ msg }: { msg: SequenceMessage }) {
         <div>{msg.label || ""}</div>
         <div>Sub</div>
         <div>{msg.subLabel || "-"}</div>
-        <div>Signal</div>
-        <div>{msg.signal || "-"}</div>
-        <div>Value</div>
-        <div>{msg.value || "-"}</div>
+        {msg.fields?.ACT_ID && (
+          <>
+            <div>ActID</div>
+            <div>{msg.fields.ACT_ID}</div>
+          </>
+        )}
+        {!isMesEif && (
+          <>
+            <div>Signal</div>
+            <div>{msg.signal || "-"}</div>
+            <div>Value</div>
+            <div>{msg.value || "-"}</div>
+          </>
+        )}
         <div>LOTID</div>
         <div>{msg.lotId || "-"}</div>
-        <div>POSITION</div>
-        <div>{msg.position || "-"}</div>
+        {!isMesEif && (
+          <>
+            <div>POSITION</div>
+            <div>{msg.position || "-"}</div>
+          </>
+        )}
         <div>Alarm</div>
         <div>{msg.isAlarm ? "YES" : "no"}</div>
+        {msg.fields?.JOB_CODE && (
+          <>
+            <div>JOB_CODE</div>
+            <div>{msg.fields.JOB_CODE}</div>
+          </>
+        )}
       </div>
 
       <h3 className="detail-section-title">{isTrace ? "Bit Fields" : "Fields"}</h3>
@@ -573,8 +588,14 @@ function DetailBody({ msg }: { msg: SequenceMessage }) {
         <FieldPairs entries={bitEntries} empty="없음" />
       </div>
 
-      <h3 className="detail-section-title">{isTrace ? "Bit Raw" : "Message Raw"}</h3>
-      {raw ? <pre className="raw">{raw}</pre> : <p className="muted">없음</p>}
+      <h3 className="detail-section-title">{dataTitle}</h3>
+      {raw ? (
+        <div className="raw-wrap">
+          <pre className="raw raw-detail">{raw}</pre>
+        </div>
+      ) : (
+        <p className="muted">없음</p>
+      )}
 
       {isTrace &&
         (hasWord ? (
@@ -591,7 +612,7 @@ function DetailBody({ msg }: { msg: SequenceMessage }) {
             </div>
             {wordRaw ? (
               <div className="raw-wrap" style={{ marginTop: "0.5rem" }}>
-                <pre className="raw">{wordRaw}</pre>
+                <pre className="raw raw-detail">{wordRaw}</pre>
               </div>
             ) : null}
           </>

@@ -25,6 +25,7 @@ export function parseSolaceLog(text: string, fileName: string): TimeFloorEvent[]
   let seq = 0;
   const skipped = new Set<string>();
   const bizById = new Map<string, string>();
+  const actById = new Map<string, string>();
   const lotById = new Map<string, string>();
 
   while (index < lines.length) {
@@ -61,7 +62,9 @@ export function parseSolaceLog(text: string, fileName: string): TimeFloorEvent[]
 
     if (kind === "REQUEST") {
       const actId = pick(/"actID"\s*:\s*"([^"]+)"/, raw) || "REQUEST";
-      const uuid = pick(/EIF\/RAW_DATA\(([^)]+)\)/, rest);
+      const uuid =
+        pick(/EIF\/(?:RAW_DATA|TEST_DATA)\(([^)]+)\)/, rest) ||
+        pick(/EIF\/[A-Z0-9_]+\(([0-9a-fA-F-]{36})\)/, rest);
       if (ignored(actId)) {
         if (uuid) skipped.add(uuid);
         continue;
@@ -76,18 +79,20 @@ export function parseSolaceLog(text: string, fileName: string): TimeFloorEvent[]
       const lineStop = pick(/\\?"LINESTOP\\?"\s*:\s*\\?"([^\\"]*)\\?"/, raw) || pick(/<LINESTOP>([^<]*)<\/LINESTOP>/i, raw);
 
       const bizName = shortActId(actId);
-      let subLabel = "REQUEST";
-      if (streamId) subLabel = eifName ? `${streamId} ${eifName}` : streamId;
-      else if (eifId) subLabel = eifName ? `${eifId} ${eifName}` : eifId;
+      // Keep REQUEST visible on TimeFloor; stream/eif ids stay in fields
+      const subLabel = "REQUEST";
 
       const fields: Record<string, string> = { ACT_ID: actId, KIND: "REQUEST" };
       if (streamId) fields.STREAM_FUNCTION_ID = streamId;
+      if (eifId) fields.EIF_ID = eifId;
+      if (eifName) fields.EIF_NAME = eifName;
       if (uuid) fields.CORRELATION_ID = uuid;
       if (result) fields.RESULT = result;
       if (lineStop) fields.LINESTOP = lineStop;
 
       if (uuid) {
         bizById.set(uuid, bizName);
+        actById.set(uuid, actId);
         if (lotId) lotById.set(uuid, lotId);
       }
 
@@ -107,20 +112,28 @@ export function parseSolaceLog(text: string, fileName: string): TimeFloorEvent[]
         subLabel,
         fields,
         isAlarm: isAlarm(fields, raw),
-        rawSnippet: raw.length > 4000 ? raw.slice(0, 4000) + "…" : raw,
+        rawSnippet: raw,
       });
     } else {
       const uuid = pick(/\(([0-9a-fA-F-]{36})\)\s*:/, rest);
       if (uuid && skipped.has(uuid)) continue;
       const jobCode = pick(/"JOB_CODE"\s*:\s*"([^"]*)"/, raw);
       const bizName = uuid ? bizById.get(uuid) : undefined;
-      const lotId = uuid ? lotById.get(uuid) : undefined;
-      const label = bizName || (jobCode ? `REPLY JOB : ${jobCode}` : "REPLY");
+      const actId = uuid ? actById.get(uuid) : undefined;
+      const lotId =
+        (uuid ? lotById.get(uuid) : undefined) ||
+        pick(/\\?"LOT_ID\\?"\s*:\s*\\?"([^\\"]*)\\?"/, raw) ||
+        pick(/"LOT_ID"\s*:\s*"([^"]*)"/, raw) ||
+        undefined;
+
+      // Separate MES→EIF arrow; label by correlated actID (not "REPLY JOB : …")
+      const label = bizName || "REPLY";
       const subLabel = jobCode ? `REPLY : ${jobCode}` : "REPLY";
       const fields: Record<string, string> = { KIND: "RECEIVE_REPLYQ" };
       if (uuid) fields.CORRELATION_ID = uuid;
       if (jobCode) fields.JOB_CODE = jobCode;
-      if (bizName) fields.ACT_ID = bizName;
+      if (actId) fields.ACT_ID = actId;
+      else if (bizName) fields.ACT_ID = bizName;
 
       events.push({
         id: `solace-${fileName}-${seq++}-${headerLine}`,
@@ -130,14 +143,14 @@ export function parseSolaceLog(text: string, fileName: string): TimeFloorEvent[]
         title: label,
         direction: "MES->EIF",
         messageType: "RECEIVE_REPLYQ",
-        lotId,
+        lotId: lotId || undefined,
         from: "Mes",
         to: "Eif",
         label,
         subLabel,
         fields,
         isAlarm: isAlarm(fields, raw),
-        rawSnippet: raw.length > 4000 ? raw.slice(0, 4000) + "…" : raw,
+        rawSnippet: raw,
       });
     }
   }

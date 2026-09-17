@@ -708,6 +708,13 @@ pre.raw {
   white-space: pre;
   tab-size: 2;
 }
+pre.raw.raw-detail {
+  max-height: min(70vh, 640px);
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.8rem;
+  line-height: 1.6;
+}
 
 .log-viewer .sidebar {
   min-height: 0;

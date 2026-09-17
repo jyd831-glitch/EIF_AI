@@ -169,25 +169,37 @@ body {
 .lot-combo {
   position: relative;
   width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
 }
 .lot-combo input { width: 100%; }
 .lot-suggest {
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: calc(100% + 2px);
-  z-index: 50;
+  position: relative;
+  left: auto;
+  right: auto;
+  top: auto;
+  z-index: 1;
   margin: 0;
   padding: 0.25rem 0;
   list-style: none;
-  max-height: 240px;
+  max-height: 220px;
   overflow: auto;
   background: #fff;
   border: 1px solid #9eb0c3;
   border-radius: 8px;
-  box-shadow: 0 8px 20px rgba(20, 35, 55, 0.18);
+  box-shadow: 0 4px 12px rgba(20, 35, 55, 0.1);
+}
+.lot-suggest-panel.is-collapsed {
+  display: none;
 }
 .lot-suggest[hidden] { display: none !important; }
+.lot-suggest-empty {
+  padding: 0.45rem 0.65rem;
+  color: var(--muted);
+  cursor: default;
+  font-size: 0.8rem;
+}
 .lot-suggest li {
   padding: 0.45rem 0.65rem;
   font-family: var(--mono);

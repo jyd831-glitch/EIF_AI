@@ -4,18 +4,14 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { LogFile, SequenceMessage, TimeFloorResult } from "@/lib/types";
 import {
   buildTimeFloor,
-  collectLotIds,
   directoryPickerBlockedReason,
+  normalizeLogFilePaths,
   pickDirectoryHandle,
   readFilesFromDirectoryHandle,
   readFilesFromInput,
   rereadLogFiles,
 } from "@/lib/buildTimeFloor";
 import { formatMessagePayload } from "@/lib/formatPayload";
-import { parseSfcLog } from "@/lib/parsers/sfc";
-import { parseSolaceLog } from "@/lib/parsers/solace";
-import { parseTraceLog } from "@/lib/parsers/trace";
-import { isPcAscTrace, parsePcTraceLog } from "@/lib/parsers/pcTrace";
 
 const ACTOR_X = { Mes: 0, Eif: 1, Plc: 2 } as const;
 
@@ -39,27 +35,9 @@ function prettyRaw(raw?: string) {
   return formatMessagePayload(raw);
 }
 
-function pathHasKind(path: string, kind: "SFC" | "SOLACE" | "TRACE") {
-  // webkit: PLCTYPE/SFC/a.log  |  directory picker: SFC/a.log
-  return path.split("/").some((seg) => seg === kind);
-}
-
-function collectEventsFromFiles(loaded: LogFile[]) {
-  const events = [];
-  for (const f of loaded) {
-    const p = f.relativePath.replace(/\\/g, "/").toUpperCase();
-    if (pathHasKind(p, "SFC")) events.push(...parseSfcLog(f.text, f.name));
-    else if (pathHasKind(p, "SOLACE")) events.push(...parseSolaceLog(f.text, f.name));
-    else if (pathHasKind(p, "TRACE")) {
-      if (isPcAscTrace(f.text)) events.push(...parsePcTraceLog(f.text, f.name));
-      else events.push(...parseTraceLog(f.text, f.name, true));
-    }
-  }
-  return events;
-}
-
 export default function TimeFloorApp({ embedded = false }: { embedded?: boolean }) {
   const fileRef = useRef<HTMLInputElement>(null);
+  const lotInputRef = useRef<HTMLInputElement>(null);
   const dirHandleRef = useRef<FileSystemDirectoryHandle | null>(null);
   const [files, setFiles] = useState<LogFile[]>([]);
   const [folderLabel, setFolderLabel] = useState("");
@@ -92,19 +70,26 @@ export default function TimeFloorApp({ embedded = false }: { embedded?: boolean 
     labelRoot: string,
     options: { preserveLot: boolean }
   ) {
-    if (!loaded.length) throw new Error(".log 파일을 찾지 못했습니다.");
-    setFiles(loaded);
-    setFolderLabel(`${labelRoot} (${loaded.length} logs)`);
+    const normalized = normalizeLogFilePaths(loaded, labelRoot);
+    if (!normalized.length) throw new Error(".log 파일을 찾지 못했습니다.");
 
-    const events = collectEventsFromFiles(loaded);
-    setLotIds(collectLotIds(events));
+    // Yield so "작성 중…" UI paints before heavy parse
+    await new Promise((r) => setTimeout(r, 0));
+
+    const preview = buildTimeFloor(normalized, "", includeBitOff);
+    const lots = preview.lotIds;
+
+    setFiles(normalized);
+    setFolderLabel(`${labelRoot} (${normalized.length} logs)`);
+    setLotIds(lots);
     setSelected(null);
     setDetailOpen(false);
+    setSuggestOpen(true);
 
     const previousLot = options.preserveLot ? lotId.trim() : "";
     if (options.preserveLot && previousLot) {
       setLotId(previousLot);
-      const built = buildTimeFloor(loaded, previousLot, includeBitOff);
+      const built = buildTimeFloor(normalized, previousLot, includeBitOff);
       setResult(built);
       if (built.lotIds.length) setLotIds(built.lotIds);
       if (!built.messages.length) setError(`LOTID "${previousLot}" 에 해당하는 시퀀스가 없습니다.`);
@@ -112,7 +97,33 @@ export default function TimeFloorApp({ embedded = false }: { embedded?: boolean 
     } else {
       setLotId("");
       setResult(null);
-      setError("");
+      if (!lots.length) {
+        setError("폴더는 열렸지만 LOT ID를 찾지 못했습니다. SFC/SOLACE/TRACE 로그가 있는지 확인하세요.");
+      } else {
+        setError("");
+        queueMicrotask(() => lotInputRef.current?.focus());
+      }
+    }
+  }
+
+  function selectLot(lot: string) {
+    setLotId(lot);
+    setSuggestOpen(false);
+    if (!files.length) return;
+    setBusy(true);
+    setError("");
+    try {
+      const built = buildTimeFloor(files, lot, includeBitOff);
+      setResult(built);
+      if (built.lotIds.length) setLotIds(built.lotIds);
+      setSelected(null);
+      setDetailOpen(false);
+      if (!built.messages.length) setError(`LOTID "${lot}" 에 해당하는 시퀀스가 없습니다.`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setResult(null);
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -295,34 +306,46 @@ export default function TimeFloorApp({ embedded = false }: { embedded?: boolean 
         </div>
 
         <label className="field lot-field">
-          <span>LOT ID</span>
+          <span>
+            LOT ID
+            {lotIds.length > 0 ? ` · ${lotIds.length}건` : files.length ? " · 없음" : ""}
+          </span>
           <div className="lot-combo">
             <input
+              ref={lotInputRef}
               value={lotId}
-              onChange={(e) => setLotId(e.target.value)}
+              onChange={(e) => {
+                setLotId(e.target.value);
+                setSuggestOpen(true);
+              }}
               onFocus={() => setSuggestOpen(true)}
               onBlur={() => setTimeout(() => setSuggestOpen(false), 150)}
               onKeyDown={(e) => {
                 if (e.key === "Enter") runBuild();
               }}
-              placeholder="예: HZFG300200"
+              placeholder={lotIds.length ? "입력하거나 아래 목록에서 선택" : "예: HZFG300200"}
               autoComplete="off"
               spellCheck={false}
+              disabled={!files.length || busy}
             />
-            {suggestOpen && filteredLots.length > 0 && (
-              <ul className="lot-suggest">
-                {filteredLots.map((lot) => (
-                  <li
-                    key={lot}
-                    onMouseDown={(e) => {
-                      e.preventDefault();
-                      setLotId(lot);
-                      setSuggestOpen(false);
-                    }}
-                  >
-                    {lot}
-                  </li>
-                ))}
+            {files.length > 0 && lotIds.length > 0 && (
+              <ul className="lot-suggest lot-suggest-panel">
+                {filteredLots.length === 0 ? (
+                  <li className="lot-suggest-empty">일치하는 LOT 없음</li>
+                ) : (
+                  filteredLots.map((lot) => (
+                    <li
+                      key={lot}
+                      className={lot === lotId ? "active" : undefined}
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        selectLot(lot);
+                      }}
+                    >
+                      {lot}
+                    </li>
+                  ))
+                )}
               </ul>
             )}
           </div>

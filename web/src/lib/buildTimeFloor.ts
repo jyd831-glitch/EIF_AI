@@ -93,10 +93,35 @@ function filterByLot(all: TimeFloorEvent[], lot: string): TimeFloorEvent[] {
   return all.filter((e) => selected.has(e.id));
 }
 
+/**
+ * Directory picker may omit SFC/SOLACE/TRACE in the path when that folder itself
+ * was selected. Infer kind from the selected root name or common EIF file names.
+ */
+export function normalizeLogFilePaths(files: LogFile[], rootFolderName?: string): LogFile[] {
+  const rootKind = rootFolderName?.toUpperCase().match(/^(SFC|SOLACE|TRACE)$/)?.[1];
+
+  return files.map((f) => {
+    let relativePath = normPath(f.relativePath);
+    const parts = relativePath.split("/");
+    const hasKind = parts.some((p) => /^(SFC|SOLACE|TRACE)$/i.test(p));
+
+    if (!hasKind && rootKind) {
+      relativePath = `${rootKind}/${relativePath}`;
+    } else if (!hasKind) {
+      const name = f.name.toUpperCase();
+      if (/SOLACE|CALLBIZSOLACE/i.test(name)) relativePath = `SOLACE/${relativePath}`;
+      else if (/VARIABLE_TRACE|\.PLC|TRACE/i.test(name)) relativePath = `TRACE/${relativePath}`;
+      else if (/\bSFC\b|SFC_/i.test(name)) relativePath = `SFC/${relativePath}`;
+    }
+
+    return relativePath === normPath(f.relativePath) ? f : { ...f, relativePath };
+  });
+}
+
 export function groupLogFiles(files: LogFile[]) {
   const groups = new Map<string, { sfc: LogFile[]; solace: LogFile[]; trace: LogFile[]; root: string }>();
 
-  for (const f of files) {
+  for (const f of normalizeLogFilePaths(files)) {
     const path = normPath(f.relativePath);
     const parts = path.split("/");
     const typeIdx = parts.findIndex((p) => /^(SFC|SOLACE|TRACE)$/i.test(p));

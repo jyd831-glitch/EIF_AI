@@ -5,6 +5,8 @@ import type { LogFile, SequenceMessage, TimeFloorResult } from "@/lib/types";
 import {
   buildTimeFloor,
   collectLotIds,
+  directoryPickerBlockedReason,
+  pickDirectoryHandle,
   readFilesFromDirectoryHandle,
   readFilesFromInput,
   rereadLogFiles,
@@ -111,6 +113,30 @@ export default function TimeFloorApp({ embedded = false }: { embedded?: boolean 
       setLotId("");
       setResult(null);
       setError("");
+    }
+  }
+
+  async function browseFolder() {
+    if (busy) return;
+
+    const blocked = directoryPickerBlockedReason();
+    if (blocked) {
+      setError(blocked);
+      return;
+    }
+
+    setBusy(true);
+    setError("");
+    try {
+      const handle = await pickDirectoryHandle();
+      if (!handle) return;
+      dirHandleRef.current = handle;
+      const loaded = await readFilesFromDirectoryHandle(handle);
+      await applyLoadedFiles(loaded, handle.name, { preserveLot: false });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -239,20 +265,15 @@ export default function TimeFloorApp({ embedded = false }: { embedded?: boolean 
           <span>로그 폴더</span>
           <div className="folder-picker">
             <input readOnly value={folderLabel} placeholder="폴더 선택 (SFC/SOLACE/TRACE 포함)" />
-            <label
-              htmlFor="timefloor-folder-input"
-              className={`btn${busy ? " is-disabled" : ""}`}
-              aria-disabled={busy}
-              onClick={(e) => {
-                if (busy) {
-                  e.preventDefault();
-                  return;
-                }
-                if (fileRef.current) fileRef.current.value = "";
-              }}
+            <button
+              type="button"
+              className="btn"
+              disabled={busy}
+              title="로컬 폴더 열기 (읽기 전용)"
+              onClick={() => void browseFolder()}
             >
               찾아보기...
-            </label>
+            </button>
             <button
               type="button"
               className="btn"

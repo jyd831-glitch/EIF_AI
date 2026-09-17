@@ -3,6 +3,8 @@
 import { startTransition, useEffect, useMemo, useRef, useState } from "react";
 import type { LogFile } from "@/lib/types";
 import {
+  directoryPickerBlockedReason,
+  pickDirectoryHandle,
   readFilesFromDirectoryHandle,
   readFilesFromInput,
   rereadLogFiles,
@@ -298,6 +300,30 @@ export default function LogViewerApp() {
     }
   }
 
+  async function browseFolder() {
+    if (busy) return;
+
+    const blocked = directoryPickerBlockedReason();
+    if (blocked) {
+      setError(blocked);
+      return;
+    }
+
+    setBusy(true);
+    setError("");
+    try {
+      const handle = await pickDirectoryHandle();
+      if (!handle) return;
+      dirHandleRef.current = handle;
+      const loaded = await readFilesFromDirectoryHandle(handle);
+      await applyLoaded(loaded, handle.name);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function onPickFolder(list: FileList | null) {
     if (!list?.length) return;
     dirHandleRef.current = null;
@@ -386,12 +412,8 @@ export default function LogViewerApp() {
               type="button"
               className="btn"
               disabled={busy}
-              onClick={() => {
-                if (fileRef.current) {
-                  fileRef.current.value = "";
-                  fileRef.current.click();
-                }
-              }}
+              title="로컬 폴더 열기 (읽기 전용)"
+              onClick={() => void browseFolder()}
             >
               찾아보기...
             </button>

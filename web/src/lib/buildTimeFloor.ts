@@ -199,6 +199,49 @@ type DirHandle = FileSystemDirectoryHandle & {
   entries: () => AsyncIterableIterator<[string, FileSystemHandle]>;
 };
 
+type WindowWithDirPicker = Window & {
+  showDirectoryPicker?: (options?: {
+    mode?: "read" | "readwrite";
+  }) => Promise<FileSystemDirectoryHandle>;
+};
+
+/** True when the browser supports the File System Access folder picker (Select Folder / Open). */
+export function canShowDirectoryPicker(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    window.isSecureContext &&
+    typeof (window as WindowWithDirPicker).showDirectoryPicker === "function"
+  );
+}
+
+export function directoryPickerBlockedReason(): string | null {
+  if (typeof window === "undefined") return null;
+  if (!window.isSecureContext) {
+    return "폴더 열기는 HTTPS 또는 localhost 에서만 가능합니다. http://로컬IP 로는 Upload 방식만 열려 보안 정책에 막힐 수 있습니다. https://eif-ai-mu.vercel.app 또는 http://localhost:3000 을 사용하세요.";
+  }
+  if (typeof (window as WindowWithDirPicker).showDirectoryPicker !== "function") {
+    return "이 브라우저는 폴더 열기(showDirectoryPicker)를 지원하지 않습니다. Chrome/Edge 최신 버전을 사용하세요.";
+  }
+  return null;
+}
+
+/**
+ * Native folder picker (mode: read) — not the webkitdirectory "Upload" dialog.
+ * Returns null if the user cancels or the API is unavailable.
+ */
+export async function pickDirectoryHandle(): Promise<FileSystemDirectoryHandle | null> {
+  const picker = (window as WindowWithDirPicker).showDirectoryPicker;
+  if (!picker) return null;
+  try {
+    return await picker.call(window, { mode: "read" });
+  } catch (e) {
+    if (e instanceof DOMException && (e.name === "AbortError" || e.name === "NotAllowedError")) {
+      return null;
+    }
+    throw e;
+  }
+}
+
 export async function readFilesFromDirectoryHandle(
   root: FileSystemDirectoryHandle,
   basePath = ""

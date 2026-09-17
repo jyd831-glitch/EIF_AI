@@ -44,6 +44,9 @@ body {
   background: rgba(255, 255, 255, 0.96);
   flex-shrink: 0;
 }
+.shell-top .mode-badge {
+  margin-left: auto;
+}
 .shell-tabs {
   display: flex;
   gap: 0.35rem;
@@ -977,5 +980,147 @@ pre.raw.raw-detail {
     min-height: 300px;
     max-height: 50vh;
   }
+}
+
+/* Local folder browser (PC disk, not browser Upload) */
+.folder-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  background: rgba(18, 28, 42, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+.folder-modal {
+  width: min(720px, 100%);
+  max-height: min(80vh, 640px);
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 16px 40px rgba(15, 30, 50, 0.28);
+  overflow: hidden;
+}
+.folder-modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.9rem 1rem;
+  border-bottom: 1px solid var(--line);
+}
+.folder-modal-head h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+.folder-modal-head p {
+  margin: 0.2rem 0 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+.folder-modal-toolbar {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  gap: 0.4rem;
+  padding: 0.65rem 1rem;
+  border-bottom: 1px solid var(--line);
+  align-items: center;
+}
+.folder-modal-path {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.45rem 0.55rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.folder-modal-error {
+  margin: 0.5rem 1rem 0;
+  padding: 0.5rem 0.65rem;
+  border-radius: 8px;
+  background: #fde8e8;
+  color: #8a1f1f;
+  font-size: 0.8rem;
+}
+.folder-modal-list {
+  flex: 1;
+  overflow: auto;
+  padding: 0.35rem 0.5rem 0.75rem;
+}
+.folder-modal-list table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+.folder-modal-list th {
+  text-align: left;
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 0.7rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 0.35rem 0.55rem;
+}
+.folder-modal-list td {
+  padding: 0.4rem 0.55rem;
+  border-top: 1px solid #e8eef5;
+}
+.folder-modal-list tr.is-dir {
+  cursor: pointer;
+}
+.folder-modal-list tr.is-file {
+  opacity: 0.7;
+}
+.folder-modal-list tr.is-selectable td:first-child {
+  font-weight: 600;
+  color: #1a3f7a;
+}
+.folder-modal-list tr.is-selected {
+  background: #e8f0fb;
+}
+.folder-modal-list tr:hover.is-dir {
+  background: #f3f7fc;
+}
+.folder-modal-name {
+  font-family: var(--mono);
+}
+.folder-modal-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  border-top: 1px solid var(--line);
+  flex-wrap: wrap;
+}
+.folder-modal-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+.mode-badge {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  padding: 0.25rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.mode-badge.local {
+  background: #e8f6ec;
+  border-color: #9bc7a8;
+  color: #1d5c32;
+}
+.mode-badge.cloud {
+  background: #eef3fb;
+  border-color: #a8bdd9;
+  color: #2a4d7a;
 }
 

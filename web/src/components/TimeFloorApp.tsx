@@ -11,7 +11,9 @@ import {
   readFilesFromInput,
   rereadLogFiles,
 } from "@/lib/buildTimeFloor";
+import { fetchFileAccessMode, loadLogsFromLocalFolder, type FileAccessMode } from "@/lib/fileAccess";
 import { formatMessagePayload } from "@/lib/formatPayload";
+import LocalFolderBrowser from "@/components/LocalFolderBrowser";
 
 const ACTOR_X = { Mes: 0, Eif: 1, Plc: 2 } as const;
 
@@ -39,6 +41,9 @@ export default function TimeFloorApp({ embedded = false }: { embedded?: boolean 
   const fileRef = useRef<HTMLInputElement>(null);
   const lotInputRef = useRef<HTMLInputElement>(null);
   const dirHandleRef = useRef<FileSystemDirectoryHandle | null>(null);
+  const localFolderRef = useRef<string | null>(null);
+  const [accessMode, setAccessMode] = useState<FileAccessMode>("cloud");
+  const [browserOpen, setBrowserOpen] = useState(false);
   const [files, setFiles] = useState<LogFile[]>([]);
   const [folderLabel, setFolderLabel] = useState("");
   const [lotId, setLotId] = useState("");
@@ -50,6 +55,10 @@ export default function TimeFloorApp({ embedded = false }: { embedded?: boolean 
   const [result, setResult] = useState<TimeFloorResult | null>(null);
   const [selected, setSelected] = useState<SequenceMessage | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
+
+  useEffect(() => {
+    void fetchFileAccessMode().then((m) => setAccessMode(m.mode));
+  }, []);
 
   useEffect(() => {
     const el = fileRef.current;
@@ -130,8 +139,20 @@ export default function TimeFloorApp({ embedded = false }: { embedded?: boolean 
   async function browseFolder() {
     if (busy) return;
 
+    if (accessMode === "local") {
+      setError("");
+      setBrowserOpen(true);
+      return;
+    }
+
     const blocked = directoryPickerBlockedReason();
     if (blocked) {
+      // Cloud fallback: webkitdirectory (Upload-style) when Open picker unavailable
+      if (fileRef.current) {
+        fileRef.current.value = "";
+        fileRef.current.click();
+        return;
+      }
       setError(blocked);
       return;
     }
@@ -142,8 +163,26 @@ export default function TimeFloorApp({ embedded = false }: { embedded?: boolean 
       const handle = await pickDirectoryHandle();
       if (!handle) return;
       dirHandleRef.current = handle;
+      localFolderRef.current = null;
       const loaded = await readFilesFromDirectoryHandle(handle);
       await applyLoadedFiles(loaded, handle.name, { preserveLot: false });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onLocalFolderSelected(folderPath: string) {
+    setBrowserOpen(false);
+    setBusy(true);
+    setError("");
+    try {
+      const { folder, files: loaded } = await loadLogsFromLocalFolder(folderPath);
+      dirHandleRef.current = null;
+      localFolderRef.current = folder;
+      const label = folder.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || folder;
+      await applyLoadedFiles(loaded, label, { preserveLot: false });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -154,6 +193,7 @@ export default function TimeFloorApp({ embedded = false }: { embedded?: boolean 
   async function onPickFolder(list: FileList | null) {
     if (!list?.length) return;
     dirHandleRef.current = null;
+    localFolderRef.current = null;
     setBusy(true);
     setError("");
     try {
@@ -170,7 +210,7 @@ export default function TimeFloorApp({ embedded = false }: { embedded?: boolean 
   }
 
   async function refreshFolder() {
-    if (!files.length && !dirHandleRef.current) {
+    if (!files.length && !dirHandleRef.current && !localFolderRef.current) {
       setError("로그 폴더를 먼저 선택하세요.");
       return;
     }
@@ -180,7 +220,12 @@ export default function TimeFloorApp({ embedded = false }: { embedded?: boolean 
       let loaded: LogFile[] = [];
       let labelRoot = folderLabel.split(" (")[0] || "선택됨";
 
-      if (dirHandleRef.current) {
+      if (localFolderRef.current) {
+        const { folder, files: next } = await loadLogsFromLocalFolder(localFolderRef.current);
+        localFolderRef.current = folder;
+        loaded = next;
+        labelRoot = folder.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || folder;
+      } else if (dirHandleRef.current) {
         const handle = dirHandleRef.current as FileSystemDirectoryHandle & {
           queryPermission: (descriptor?: { mode?: "read" | "readwrite" }) => Promise<PermissionState>;
           requestPermission: (descriptor?: { mode?: "read" | "readwrite" }) => Promise<PermissionState>;
@@ -280,7 +325,7 @@ export default function TimeFloorApp({ embedded = false }: { embedded?: boolean 
               type="button"
               className="btn"
               disabled={busy}
-              title="로컬 폴더 열기 (읽기 전용)"
+              title={accessMode === "local" ? "PC 디스크에서 폴더 열기" : "브라우저 폴더 선택"}
               onClick={() => void browseFolder()}
             >
               찾아보기...
@@ -376,7 +421,9 @@ export default function TimeFloorApp({ embedded = false }: { embedded?: boolean 
               range: {fmtDateTime(result.startTime)}
             </>
           ) : (
-            "브라우저에서 로그 폴더를 선택합니다. (서버 업로드 없음)"
+            accessMode === "local"
+              ? "로컬 모드: PC 디스크를 서버가 직접 읽습니다."
+              : "클라우드 모드: 브라우저 폴더 선택 (서버로 로그 저장 안 함)"
           )}
         </div>
 
@@ -398,6 +445,7 @@ export default function TimeFloorApp({ embedded = false }: { embedded?: boolean 
           {!messages.length ? (
             <div className="empty">
               <b>찾아보기...</b>로 SFCTYPE / PCTYPE / PLCTYPE 폴더를 선택한 뒤 LOTID를 입력하세요.
+              {accessMode === "local" ? " (로컬: 디스크 직접 읽기)" : " (클라우드: 브라우저 선택)"}
             </div>
           ) : (
             <SequenceView
@@ -434,6 +482,13 @@ export default function TimeFloorApp({ embedded = false }: { embedded?: boolean 
           )}
         </div>
       </section>
+      <LocalFolderBrowser
+        open={browserOpen}
+        mode="timefloor"
+        initialPath={localFolderRef.current}
+        onClose={() => setBrowserOpen(false)}
+        onSelect={(folder) => void onLocalFolderSelected(folder)}
+      />
     </div>
   );
 }

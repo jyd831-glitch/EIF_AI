@@ -9,6 +9,8 @@ import {
   readFilesFromInput,
   rereadLogFiles,
 } from "@/lib/buildTimeFloor";
+import { fetchFileAccessMode, loadLogsFromLocalFolder, type FileAccessMode } from "@/lib/fileAccess";
+import LocalFolderBrowser from "@/components/LocalFolderBrowser";
 import {
   dateFromFileName,
   expandHitsToMessageBlocks,
@@ -118,6 +120,9 @@ function fileHitsToText(hits: FileMessageHit[]): string {
 export default function LogViewerApp() {
   const fileRef = useRef<HTMLInputElement>(null);
   const dirHandleRef = useRef<FileSystemDirectoryHandle | null>(null);
+  const localFolderRef = useRef<string | null>(null);
+  const [accessMode, setAccessMode] = useState<FileAccessMode>("cloud");
+  const [browserOpen, setBrowserOpen] = useState(false);
   const [files, setFiles] = useState<LogFile[]>([]);
   const [folderLabel, setFolderLabel] = useState("");
   const [busy, setBusy] = useState(false);
@@ -138,6 +143,10 @@ export default function LogViewerApp() {
 
   const [selectedPath, setSelectedPath] = useState<string>("");
   const [kindFilter, setKindFilter] = useState<string>("ALL");
+
+  useEffect(() => {
+    void fetchFileAccessMode().then((m) => setAccessMode(m.mode));
+  }, []);
 
   useEffect(() => {
     const el = fileRef.current;
@@ -303,8 +312,19 @@ export default function LogViewerApp() {
   async function browseFolder() {
     if (busy) return;
 
+    if (accessMode === "local") {
+      setError("");
+      setBrowserOpen(true);
+      return;
+    }
+
     const blocked = directoryPickerBlockedReason();
     if (blocked) {
+      if (fileRef.current) {
+        fileRef.current.value = "";
+        fileRef.current.click();
+        return;
+      }
       setError(blocked);
       return;
     }
@@ -315,8 +335,26 @@ export default function LogViewerApp() {
       const handle = await pickDirectoryHandle();
       if (!handle) return;
       dirHandleRef.current = handle;
+      localFolderRef.current = null;
       const loaded = await readFilesFromDirectoryHandle(handle);
       await applyLoaded(loaded, handle.name);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onLocalFolderSelected(folderPath: string) {
+    setBrowserOpen(false);
+    setBusy(true);
+    setError("");
+    try {
+      const { folder, files: loaded } = await loadLogsFromLocalFolder(folderPath);
+      dirHandleRef.current = null;
+      localFolderRef.current = folder;
+      const label = folder.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || folder;
+      await applyLoaded(loaded, label);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -327,6 +365,7 @@ export default function LogViewerApp() {
   async function onPickFolder(list: FileList | null) {
     if (!list?.length) return;
     dirHandleRef.current = null;
+    localFolderRef.current = null;
     setBusy(true);
     setError("");
     try {
@@ -343,7 +382,7 @@ export default function LogViewerApp() {
   }
 
   async function refreshFolder() {
-    if (!files.length) {
+    if (!files.length && !dirHandleRef.current && !localFolderRef.current) {
       setError("로그 폴더를 먼저 선택하세요.");
       return;
     }
@@ -353,7 +392,12 @@ export default function LogViewerApp() {
       let loaded: LogFile[] = [];
       let labelRoot = folderLabel.split(" (")[0] || "선택됨";
 
-      if (dirHandleRef.current) {
+      if (localFolderRef.current) {
+        const { folder, files: next } = await loadLogsFromLocalFolder(localFolderRef.current);
+        localFolderRef.current = folder;
+        loaded = next;
+        labelRoot = folder.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || folder;
+      } else if (dirHandleRef.current) {
         const handle = dirHandleRef.current as FileSystemDirectoryHandle & {
           queryPermission: (descriptor?: { mode?: "read" | "readwrite" }) => Promise<PermissionState>;
           requestPermission: (descriptor?: { mode?: "read" | "readwrite" }) => Promise<PermissionState>;
@@ -412,7 +456,7 @@ export default function LogViewerApp() {
               type="button"
               className="btn"
               disabled={busy}
-              title="로컬 폴더 열기 (읽기 전용)"
+              title={accessMode === "local" ? "PC 디스크에서 폴더 열기" : "브라우저 폴더 선택"}
               onClick={() => void browseFolder()}
             >
               찾아보기...
@@ -584,6 +628,13 @@ export default function LogViewerApp() {
           )}
         </div>
       </main>
+      <LocalFolderBrowser
+        open={browserOpen}
+        mode="logviewer"
+        initialPath={localFolderRef.current}
+        onClose={() => setBrowserOpen(false)}
+        onSelect={(folder) => void onLocalFolderSelected(folder)}
+      />
     </div>
   );
 }

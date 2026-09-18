@@ -52,10 +52,6 @@ function rankLogFile(f: LogFile, q: string) {
   return { file: f, score, lineHits, nameHit, pathHit };
 }
 
-function blocksToText(blocks: { lines: { text: string }[] }[]): string {
-  return blocks.map((b) => b.lines.map((l) => l.text).join("\n")).join("\n\n");
-}
-
 type FileMessageHit = {
   path: string;
   block: MessageBlock;
@@ -99,20 +95,37 @@ function searchAllFilesInRange(
   return { hits, matchedFiles, scannedFiles: allFiles.length };
 }
 
-function fileHitsToText(hits: FileMessageHit[]): string {
+/** Time-ordered hits may interleave files — label every block with its path. */
+function chronologicalHitsToText(hits: FileMessageHit[]): string {
   const parts: string[] = [];
-  let lastPath = "";
   for (const hit of hits) {
-    if (hit.path !== lastPath) {
-      if (parts.length) parts.push("");
-      parts.push(`========== ${hit.path} ==========`);
-      parts.push("");
-      lastPath = hit.path;
-    }
+    parts.push(`---------- ${hit.path} ----------`);
     parts.push(hit.block.lines.map((l) => l.text).join("\n"));
     parts.push("");
   }
   return parts.join("\n").trimEnd();
+}
+
+function sortHitsByTime(hits: FileMessageHit[]): FileMessageHit[] {
+  return [...hits].sort((a, b) => {
+    const ta = a.block.timestamp?.getTime() ?? 0;
+    const tb = b.block.timestamp?.getTime() ?? 0;
+    return ta - tb || a.path.localeCompare(b.path) || a.block.start - b.block.start;
+  });
+}
+
+function collectQueryHits(targets: LogFile[], query: string): FileMessageHit[] {
+  const q = query.trim();
+  if (!q) return [];
+  const hits: FileMessageHit[] = [];
+  for (const f of targets) {
+    const text = f.text.replace(/\r\n/g, "\n");
+    const { blocks } = expandHitsToMessageBlocks(text, q);
+    for (const block of blocks) {
+      hits.push({ path: f.relativePath, block });
+    }
+  }
+  return sortHitsByTime(hits);
 }
 
 export default function LogViewerApp() {
@@ -147,13 +160,14 @@ export default function LogViewerApp() {
     el.setAttribute("multiple", "");
   }, []);
 
-  /** Sidebar search: whole log file (no time filter). */
+  /** Sidebar search: match files + show all hits (time-sorted) until a file is picked. */
   function runFileSearch() {
     const q = fileFilterDraft.trim();
     setFileFilter(q);
     setFullContentQuery(q);
     setTimeSearchActive(false);
     setTimeContentQuery("");
+    setSelectedPath("");
   }
 
   /** Toolbar search: scan every file in the folder for the date/time window. */
@@ -161,11 +175,15 @@ export default function LogViewerApp() {
     setTimeContentQuery(timeContentDraft.trim());
     setTimeSearchActive(true);
     setFullContentQuery("");
+    setSelectedPath("");
   }
 
   function selectFile(path: string) {
     setTimeSearchActive(false);
-    startTransition(() => setSelectedPath(path));
+    startTransition(() => {
+      // Toggle: click again to return to all matching files (LOT search aggregate)
+      setSelectedPath((prev) => (fullContentQuery.trim() && prev === path ? "" : path));
+    });
   }
 
   const kinds = useMemo(() => {
@@ -215,7 +233,8 @@ export default function LogViewerApp() {
     }
     setError("");
     setTimeSearchActive(false);
-    startTransition(() => setSelectedPath(visibleFiles[0].relativePath));
+    // Keep aggregate view (all matching files, time-sorted) until user picks a file
+    startTransition(() => setSelectedPath(""));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only re-jump on new search/kind
   }, [fileFilter, kindFilter, searchEmpty]);
 
@@ -244,35 +263,40 @@ export default function LogViewerApp() {
         mode: "filter" as const,
         source: "time" as const,
         blocks: hits.map((h) => h.block),
-        text: fileHitsToText(hits),
+        text: chronologicalHitsToText(hits),
         totalLines: 0,
         matchedFiles,
         scannedFiles,
       };
     }
 
-    if (!selected) return null;
-    const text = selected.text.replace(/\r\n/g, "\n");
-
-    // Sidebar search: entire selected file
+    // LOTID / content search: all matching files (or one selected file), time-sorted
     const fullQ = fullContentQuery.trim();
     if (fullQ) {
-      const expanded = expandHitsToMessageBlocks(text, fullQ);
+      const targets = selectedPath
+        ? files.filter((f) => f.relativePath === selectedPath)
+        : visibleFiles;
+      if (!targets.length) return null;
+      const hits = collectQueryHits(targets, fullQ);
       return {
         mode: "filter" as const,
-        source: "full" as const,
-        blocks: expanded.blocks,
-        text: blocksToText(expanded.blocks),
-        totalLines: expanded.totalLines,
-        matchedFiles: 1,
-        scannedFiles: 1,
+        source: selectedPath ? ("full" as const) : ("full-all" as const),
+        blocks: hits.map((h) => h.block),
+        text: chronologicalHitsToText(hits),
+        totalLines: 0,
+        matchedFiles: selectedPath ? 1 : visibleFiles.length,
+        scannedFiles: selectedPath ? 1 : visibleFiles.length,
       };
     }
 
+    if (!selected) return null;
+    const text = selected.text.replace(/\r\n/g, "\n");
     return { mode: "raw" as const, text, bytes: text.length };
   }, [
     selected,
+    selectedPath,
     files,
+    visibleFiles,
     fullContentQuery,
     timeSearchActive,
     timeContentQuery,
@@ -387,9 +411,11 @@ export default function LogViewerApp() {
           {folderLabel ? `로그뷰어 · ${folderLabel}` : "로그 폴더를 선택하세요"}
           {timeSearchActive
             ? ""
-            : selected
-              ? ` · ${selected.name}`
-              : ""}
+            : fullContentQuery.trim() && !selectedPath
+              ? ` · LOT검색 ${visibleFiles.length} files (시간순)`
+              : selected
+                ? ` · ${selected.name}`
+                : ""}
           {viewModel?.mode === "raw"
             ? ` · ${(viewModel.bytes / 1024).toFixed(viewModel.bytes >= 102400 ? 0 : 1)} KB`
             : ""}
@@ -397,7 +423,9 @@ export default function LogViewerApp() {
             ? ` · ${viewModel.blocks.length.toLocaleString()} msg${
                 viewModel.source === "time"
                   ? ` · 폴더검색 ${viewModel.matchedFiles}/${viewModel.scannedFiles} files`
-                  : " · 전체검색"
+                  : viewModel.source === "full-all"
+                    ? ` · 매칭파일 전체 ${viewModel.matchedFiles} files · 시간순`
+                    : " · 선택파일"
               }`
             : ""}
         </div>
@@ -476,7 +504,9 @@ export default function LogViewerApp() {
           {error
             ? error
             : files.length
-              ? `${visibleFiles.length}/${files.length} files`
+              ? fullContentQuery.trim() && !selectedPath
+                ? `${visibleFiles.length}/${files.length} files · 전체 시간순 (파일 클릭 시 해당 파일만)`
+                : `${visibleFiles.length}/${files.length} files`
               : "폴더를 선택하세요"}
         </div>
 
@@ -562,7 +592,7 @@ export default function LogViewerApp() {
           {!viewModel ? (
             <div className="empty">
               {files.length
-                ? "날짜·시간을 설정한 뒤 검색하거나, 왼쪽에서 로그 파일을 선택하세요."
+                ? "날짜·시간을 설정한 뒤 검색하거나, LOTID/키워드 검색 또는 왼쪽에서 로그 파일을 선택하세요."
                 : "왼쪽에서 로그 폴더를 선택하세요."}
             </div>
           ) : viewModel.mode === "raw" ? (

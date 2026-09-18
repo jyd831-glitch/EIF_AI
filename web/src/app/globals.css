@@ -37,8 +37,8 @@ body {
 .shell-top {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
+  justify-content: flex-start;
+  gap: 1.25rem;
   padding: 0.65rem 1.2rem;
   border-bottom: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.96);
